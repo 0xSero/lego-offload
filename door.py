@@ -144,10 +144,15 @@ class Door:
         elif m == "tools/call":
             a = msg["params"].get("arguments", {})
             try:
-                out = self.offload(a.get("task", ""), a.get("inputs") or [], a.get("returns"), a.get("node"))
+                if not isinstance(a, dict) or not isinstance(a.get("inputs") or [], list):
+                    raise core.Refused("arguments must be {task, inputs: [..], returns, node}")
+                out = self.offload(str(a.get("task", "")), a.get("inputs") or [], a.get("returns"), a.get("node"))
             except core.Refused as e:
                 self._note(op="refused", reason=str(e))
                 out = {"refused": str(e)}
+            except Exception as e:                             # fail closed: a call that breaks gets nothing
+                self._note(op="refused", reason=f"call failed ({type(e).__name__})")
+                out = {"refused": f"call failed ({type(e).__name__})"}
             res = {"content": [{"type": "text", "text": json.dumps(out)}]}
         elif mid is None:
             return None                                        # notification
@@ -166,8 +171,11 @@ def serve(door, port):
             self.end_headers()
 
         def do_POST(self):
-            msg = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
-            reply = door.rpc(msg)
+            try:
+                msg = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+                reply = door.rpc(msg) if isinstance(msg, dict) else None
+            except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
+                reply = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "bad request"}}
             body = json.dumps(reply).encode() if reply else b""
             self.send_response(200 if reply else 202)
             self.send_header("Content-Type", "application/json")

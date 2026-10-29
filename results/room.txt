@@ -9,5 +9,8 @@ ok  ssh out                                    denied
 ok  internet                                   denied
 ok  symlink out, then read                     denied
 ok  hardlink out                               denied
+ok  reach another localhost service            denied
+ok  read another app's preferences             denied
+ok  read the global preferences                denied
 ok  launch with a hardlink planted in workspace denied
-ROOM 12/12
+ROOM 15/15

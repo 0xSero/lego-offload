@@ -115,7 +115,7 @@ def cloud(capture):
              any(k in r["path"] for k in ("/v1/messages", "/responses", "/chat/completions"))]
     if not convo:
         return ["*(no cloud model in this case)*"]
-    reqs = [json.loads(r["request"]) for r in convo]
+    reqs = [json.JSONDecoder().raw_decode(r["request"])[0] for r in convo]     # hex the route decoded follows
     size = lambda q: len(q.get("messages") or q.get("input") or [])
     main = max(range(len(reqs)), key=lambda i: (size(reqs[i]), i))
     req, resp, path = reqs[main], convo[main]["response"], convo[main]["path"]

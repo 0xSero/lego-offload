@@ -1,0 +1,4 @@
+variant              traces  violating  noninterference  classes  match
+salted by scope      111150          0            holds        1  True
+one shared cache     111150      21376           FAIL@2        4  True
+CACHE AGREES

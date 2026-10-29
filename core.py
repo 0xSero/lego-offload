@@ -100,22 +100,22 @@ def salt(key, scopes):
 # ---------- 4. shape: a finite answer set declared before the job runs ----------
 # schema: {"bool": True} | {"enum": [..]} | {"int": [lo, hi]} | {"tuple": [schema, ..]}
 
-def size(schema):
-    if schema.get("bool"):
+def size(schema, depth=0):
+    """Number of answers a schema allows. Anything that is not exactly one of the four forms is refused."""
+    if not isinstance(schema, dict) or len(schema) != 1 or depth > 4:
+        raise Refused("schema must be one of bool, enum, int or tuple")
+    (kind, arg), = schema.items()
+    if kind == "bool" and arg is True:
         return 2
-    if "enum" in schema:
-        opts = schema["enum"]
-        if not opts or len(set(map(repr, opts))) != len(opts) or not all(type(o) in (str, int) for o in opts):
-            raise Refused("enum needs distinct str/int options")
-        return len(opts)
-    if "int" in schema:
-        lo, hi = schema["int"]
-        if type(lo) is not int or type(hi) is not int or hi < lo:
-            raise Refused("int needs [lo, hi]")
-        return hi - lo + 1
-    if "tuple" in schema and schema["tuple"]:
-        return math.prod(size(s) for s in schema["tuple"])
-    raise Refused("schema must be bool, enum, int or tuple")
+    if kind == "enum" and isinstance(arg, list) and arg and all(type(o) in (str, int) for o in arg) \
+            and len(set(map(repr, arg))) == len(arg):
+        return len(arg)
+    if kind == "int" and isinstance(arg, list) and len(arg) == 2 and all(type(x) is int for x in arg) and arg[0] <= arg[1]:
+        return arg[1] - arg[0] + 1
+    if kind == "tuple" and isinstance(arg, list) and arg:
+        return math.prod(size(s, depth + 1) for s in arg)
+    raise Refused(f"bad {kind} schema" if kind in ("bool", "enum", "int", "tuple") else
+                  "schema must be one of bool, enum, int or tuple")
 
 
 def bits(schema):

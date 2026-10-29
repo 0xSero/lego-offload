@@ -15,6 +15,7 @@ Run it all with `../run verify` and `../run sim`. Results go to `../results/`.
 | 2. Model check | `model.bend` | `model_ref.py` | `check.py` | Over every reachable state and every trust topology, no data reaches an untrusted node, and the cloud learns only what it paid for |
 | 3. Leak counting | `qif.bend` | `qif_ref.py` | `qif_check.py` | On 16 concrete secret worlds, every attack of up to 3 offloads splits them into at most 2^(bits paid) classes per scope |
 | 4. Simulation | `sim.bend` | `sim_ref.py` | inside `sim_ref.py` | How useful the system is under budget and deadline: bit-exact Monte Carlo |
+| 5. Shared prompt cache | `cache.bend` | `cache_ref.py` | inside `cache_ref.py` | A node's prompt cache cannot make a public reply's time depend on private data, when it is salted by scope |
 
 ## The thing being checked
 
@@ -90,11 +91,31 @@ This is a Monte Carlo of a working day, using an LCG that `sim_ref.py` reproduce
 
 It shows what fraction of private questions get answered at each allowance and deadline.
 
+## 5. Shared prompt cache (`cache.bend`)
+
+Layers 2 and 3 treat the local model as a pure function. A real node keeps state between jobs: vLLM reuses cached prompt prefixes, so a job whose prompt starts like an earlier one gets its reply faster. Public jobs reply as soon as they finish (only shaped replies wait for the clock), so their reply time is an observation the cloud gets for free.
+
+The attack this layer models:
+
+1. Run a private job over hr with no `returns`. It costs nothing and replies at once with a receipt, but the node caches "task + hr file".
+2. Run public jobs whose task text is that same task followed by a guess of the file. A faster reply means the guess is in the cache.
+
+The world is one node, a secret hr value in 0..7 (8 worlds side by side), two task prefixes and eight guesses: 18 jobs per step, every sequence of up to 4 jobs (111,150 traces). The observation in each world is the hit bit of every public job. Noninterference holds when every trace leaves all 8 worlds with the same observations.
+
+| Variant | Traces | Violating | Noninterference | Worlds told apart |
+|-|-|-|-|-|
+| salted by scope (`core.salt`) | 111,150 | 0 | holds | 1 |
+| one shared cache (the mutant) | 111,150 | 21,376 | FAIL at 2 jobs | up to 4 |
+
+The Python twin computes every cache key with the real `core.salt` and a fresh session key, and also checks that the salt separates all four scope sets and changes with the session key. Bend models the salt as the scope mask; it only needs to be injective.
+
+This layer cannot cover contention: a model that shares CPU or GPU with the room lets the agent time the model's work. The door refuses such a policy (a host with a model) instead.
+
 ## Limits
 
 - **Small worlds.** The checks are complete only for the worlds above: 3 nodes, 2 scopes plus sealed, 2 result slots, and depth 3 for leak counting. A proof for any number of nodes or scopes needs an inductive argument, for example in Lean.
 - **Taint abstraction.** Layer 2 assumes any dependency can be observed. Layer 3 removes that assumption for the small world.
-- **Adapters are tested, not proved.** The sandbox room, route, door I/O and ssh transport are covered by `../tests/test_room.py` and the real-model run in `../tests/e2e.py`, not by these models.
+- **Adapters are tested, not proved.** The sandbox room, route, agent adapters, door I/O and ssh transport are covered by `../tests/test_room.py`, `../tests/test_agents.py` and the real-model run in `../tests/e2e.py`, not by these models.
 
 ## Found along the way
 

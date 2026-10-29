@@ -5,6 +5,7 @@ streams the reply back, and can capture every exchange (request and streamed rep
 import http.client
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -67,21 +68,28 @@ def gunzip(b):
     return zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(b)
 
 
+HEX = re.compile(rb"(?:[0-9a-f]{2}){32,}")
+
+
 def readable(raw, enc=""):
     """Undo compression so captures can be scanned: whole-body gzip, or Connect envelopes
-    (1 flag byte, 4 length bytes; flag bit 1 = gzipped) as Cursor sends them."""
+    (1 flag byte, 4 length bytes; flag bit 1 = gzipped) as Cursor sends them. Long hex runs
+    (Cursor's BidiAppend carries the conversation as hex-encoded protobuf) are decoded and
+    appended, so what they hold is scanned too."""
     try:
         if enc == "gzip" or raw[:2] == b"\x1f\x8b":
-            return gunzip(raw)
-        out, i = [], 0
-        while i + 5 <= len(raw) and raw[i] in (0, 1, 2, 3):
-            n = int.from_bytes(raw[i + 1:i + 5], "big")
-            part = raw[i + 5:i + 5 + n]
-            out.append(gunzip(part) if raw[i] & 1 else part)
-            i += 5 + n
-        return b"\n".join(out) if out and i == len(raw) else raw
+            raw = gunzip(raw)
+        else:
+            out, i = [], 0
+            while i + 5 <= len(raw) and raw[i] in (0, 1, 2, 3):
+                n = int.from_bytes(raw[i + 1:i + 5], "big")
+                part = raw[i + 5:i + 5 + n]
+                out.append(gunzip(part) if raw[i] & 1 else part)
+                i += 5 + n
+            raw = b"\n".join(out) if out and i == len(raw) else raw
     except (zlib.error, ValueError):
-        return raw
+        pass
+    return b"\n".join([raw] + [bytes.fromhex(h.decode()) for h in HEX.findall(raw)])
 
 
 def serve(port, upstream="anthropic", capture=None):

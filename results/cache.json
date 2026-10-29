@@ -1,0 +1,18 @@
+[
+ {
+  "variant": "salted by scope",
+  "traces": 111150,
+  "violating": 0,
+  "first_violation": "holds",
+  "max_classes": 1,
+  "bend_matches": true
+ },
+ {
+  "variant": "one shared cache",
+  "traces": 111150,
+  "violating": 21376,
+  "first_violation": "FAIL@2",
+  "max_classes": 4,
+  "bend_matches": true
+ }
+]

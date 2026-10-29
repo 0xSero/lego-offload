@@ -62,8 +62,30 @@ def test_shape():
     assert refused(core.bits, {"int": [0, 65535]})                            # 17 bits
     assert refused(core.bits, {"tuple": [{"int": [0, 999]}] * 3})             # packing facts
     for bad in [{}, {"string": True}, {"enum": []}, {"enum": ["a", "a"]}, {"int": [5, 1]},
-                {"int": [0, 1.5]}, {"enum": [[1]]}, {"tuple": []}]:
+                {"int": [0, 1.5]}, {"enum": [[1]]}, {"tuple": []},
+                {"tuple": ["int", "int"]}, "int", None, 5, [], {"bool": False}, {"bool": 1},
+                {"bool": True, "int": [0, 1]}, {"int": [0]}, {"int": [0, 1, 2]}, {"int": "0-5"},
+                {"int": [True, 3]}, {"enum": "abc"}, {"tuple": "ab"}, {"tuple": {"int": [0, 1]}}]:
         assert refused(core.size, bad), bad
+    deep = {"bool": True}
+    for _ in range(50):
+        deep = {"tuple": [deep]}
+    assert refused(core.size, deep)                                           # nesting is bounded
+    rnd = random.Random(11)                                                   # any JSON: an int or a refusal
+    atoms = [None, True, False, 0, 1, -3, 2.5, "", "int", "bool", "enum", "tuple", [], {}]
+
+    def junk(d):
+        r = rnd.random()
+        if d > 3 or r < 0.3:
+            return rnd.choice(atoms)
+        if r < 0.6:
+            return [junk(d + 1) for _ in range(rnd.randrange(4))]
+        return {rnd.choice(["bool", "enum", "int", "tuple", "x"]): junk(d + 1) for _ in range(rnd.randrange(1, 3))}
+    for _ in range(20000):
+        try:
+            assert type(core.size(junk(0))) is int
+        except Refused:
+            pass
     rnd = random.Random(7)
     schemas = [{"bool": True}, {"enum": ["live", "test", 3]}, {"int": [0, 365]},
                {"tuple": [{"bool": True}, {"int": [1, 3]}]}]
