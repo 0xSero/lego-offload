@@ -28,7 +28,7 @@ if lem := load("lemmas.txt"):
     out += ["## Brick laws (Bend, checked against core.py)\n", "```", lem.strip(), "```\n"]
 
 if mc := load("model_check.json"):
-    out += ["## Model check (Bend BFS, every reachable state, cross-checked state by state with core.py)\n",
+    out += ["## Model check (Bend BFS, every reachable state, state counts, depths and every counterexample cross-checked against core.py)\n",
             table(["variant", "states", "containment", "noninterference", "budget"],
                   [[m["variant"], m["states"]] + ["holds" if m[e] == 99 else f"FAIL at step {m[e]}"
                                                    for e in ("contain", "noninterference", "budget")]

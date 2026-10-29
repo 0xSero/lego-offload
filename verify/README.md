@@ -66,6 +66,8 @@ The model runs:
 
 `check.py` replays every Bend counterexample through `core.py`, step by step, to confirm that each one is a real attack.
 
+`model.bend` takes a part number (`bend run-c model.bend 0..6`), because HVM 0.2.38 cannot read back the whole result in one go: the printed net comes out unterminated at about 130 KB. `check.py` reassembles the 7 parts.
+
 The 3,072 mutant runs only need one fact: whether the mutant is caught. Both encodings therefore stop each of those runs at the first BFS level that shows a violation. When a mutant is not caught, the run still explores every state.
 
 ## 3. Leak counting (`qif.bend`)
@@ -100,3 +102,7 @@ It shows what fraction of private questions get answered at each allowance and d
 - **Bend 0.2.38 miscompiles a pattern.** Inside an if-branch that assigns two variables, `x = x + k` or `x = f(x)` keeps the old value. This happens on both `run-rs` and `run-c`. The repro is `bend_bug.bend`.
   - The cross-check caught it as 442 vs 735 states.
   - No Bend file here reassigns a name inside a branch.
+- **HVM's parallel C runtime sometimes leaves one term unreduced.** On two runs of the same part, a different single topology (407, then 475) came back as free variables (`$me, $ne, …`) instead of numbers.
+  - It never produces a wrong number, and every number is compared with `core.py` anyway.
+  - `../run` retries such a part up to twice, and `check.py` takes each entry from the first attempt that reduced it.
+  - An entry that is still unreduced is reported as `hvm_unreduced` and fails the check.

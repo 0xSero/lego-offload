@@ -340,6 +340,15 @@ def catches(vs):
     case List/Cons:
       return List/Cons((vs.head, catch(vs.head, 0, 512)), catches(vs.tail))
 
-def main():
-  vs = [63, 62, 61, 59, 55, 47, 31]
-  return (mutants(vs, std_t()), allowances(0, 16), topologies(0, 512), catches([62, 61, 59, 55, 47, 31]))
+# One part per run (HVM cannot read back the whole result at once):
+#   0 mutants on the standard topology, 1 allowances, 2..5 topologies in blocks of 128,
+#   6 how many of the 512 topologies catch each mutant.   bend run-c model.bend PART
+def main(part):
+  if part == 0:
+    return mutants([63, 62, 61, 59, 55, 47, 31], std_t())
+  elif part == 1:
+    return allowances(0, 16)
+  elif part < 6:
+    return topologies((part - 2) * 128, 128)
+  else:
+    return catches([62, 61, 59, 55, 47, 31])

@@ -1,0 +1,72 @@
+[
+ {
+  "variant": "all bricks",
+  "traces": 338845,
+  "A_hr": "holds",
+  "B_acme": "holds",
+  "S_sealed": "holds",
+  "T_total": "holds",
+  "max_hr_classes": 3,
+  "bend_matches": true
+ },
+ {
+  "variant": "label fails open",
+  "traces": 365890,
+  "A_hr": "holds",
+  "B_acme": "holds",
+  "S_sealed": "FAIL@1",
+  "T_total": "FAIL@1",
+  "max_hr_classes": 3,
+  "bend_matches": true
+ },
+ {
+  "variant": "no move check",
+  "traces": 338845,
+  "A_hr": "holds",
+  "B_acme": "holds",
+  "S_sealed": "holds",
+  "T_total": "holds",
+  "max_hr_classes": 3,
+  "bend_matches": true
+ },
+ {
+  "variant": "run drops labels",
+  "traces": 30667,
+  "A_hr": "FAIL@1",
+  "B_acme": "FAIL@1",
+  "S_sealed": "FAIL@1",
+  "T_total": "FAIL@1",
+  "max_hr_classes": 4,
+  "bend_matches": true
+ },
+ {
+  "variant": "no shape",
+  "traces": 280744,
+  "A_hr": "FAIL@1",
+  "B_acme": "holds",
+  "S_sealed": "holds",
+  "T_total": "FAIL@1",
+  "max_hr_classes": 4,
+  "bend_matches": true
+ },
+ {
+  "variant": "no budget",
+  "traces": 85357,
+  "A_hr": "FAIL@1",
+  "B_acme": "FAIL@1",
+  "S_sealed": "FAIL@1",
+  "T_total": "FAIL@1",
+  "max_hr_classes": 3,
+  "bend_matches": true
+ },
+ {
+  "variant": "no clock",
+  "traces": 280744,
+  "A_hr": "FAIL@1",
+  "B_acme": "holds",
+  "S_sealed": "holds",
+  "T_total": "FAIL@1",
+  "max_hr_classes": 4,
+  "bend_matches": true
+ }
+]

@@ -1,0 +1,9 @@
+variant              traces   hr<=2^ca acme<=2^cb  sealed=1    total  hr-classes  match
+all bricks           338845      holds      holds     holds    holds           3  True
+label fails open     365890      holds      holds    FAIL@1   FAIL@1           3  True
+no move check        338845      holds      holds     holds    holds           3  True
+run drops labels      30667     FAIL@1     FAIL@1    FAIL@1   FAIL@1           4  True
+no shape             280744     FAIL@1      holds     holds   FAIL@1           4  True
+no budget             85357     FAIL@1     FAIL@1    FAIL@1   FAIL@1           3  True
+no clock             280744     FAIL@1      holds     holds   FAIL@1           4  True
+QIF AGREES

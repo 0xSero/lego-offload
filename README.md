@@ -12,22 +12,28 @@ Let a cloud coding agent (Claude Code) work with private data it is never allowe
 The design is checked four ways in Bend, each cross-checked against the real code: brick laws, an exhaustive model check, leak counting and a simulation. It is also tested end to end with real models.
 
 ```
- ┌──────────── Mac (host, trusted with everything) ─────────────────────────────┐
- │                                                                              │
- │  ┌──────── room (sandbox-exec, deny by default) ─────────┐                   │
- │  │  Claude Code    workspace/ (public files only)        │                   │
- │  │      │  model calls        │ offload(task, inputs, returns)               │
- │  └──────┼─────────────────────┼──────────────────────────┘                   │
- │         ▼                     ▼                                              │
- │     route :18471           door :18472 ── core.py: label → charge → move → run│
- │  (injects the OAuth    (the only tool)          │                            │
- │   token; captures         ▲ shaped answer       │ ssh                        │
- │   every request)          │ at the deadline     ▼                            │
- └─────────┼─────────────────┼──────────────────────────────────────────────────┘
-           ▼                 │          ┌──────── gpu-box (trusted: hr, acme) ─────┐
-     api.anthropic.com       └───────── │  /data/hr  /data/acme   local model     │
-     (trusted: nothing)                 │  full outputs stay here: out/<ref>.txt  │
-                                        └─────────────────────────────────────────┘
+ Mac (host, trusted with every scope)
+ ┌────────────────────────────────────────────────────────────────────┐
+ │  room: sandbox-exec, deny by default                               │
+ │  ┌──────────────────────────────────────────────────────────┐      │
+ │  │  Claude Code            workspace/ (public files only)   │      │
+ │  └───────┬──────────────────────────────┬───────────────────┘      │
+ │          │ model calls                  │ offload(task, inputs,    │
+ │          ▼                              ▼         returns)         │
+ │   route :18471                    door :18472                      │
+ │   swaps in the real token,        core.py decides:                 │
+ │   captures every exchange         label → charge → move → run      │
+ │          │                        reply: full | shaped | receipt   │
+ └──────────┼──────────────────────────────┼──────────────────────────┘
+            ▼                              │ ssh: only where policy allows
+   api.anthropic.com                       ▼
+   (trusted with nothing)         gpu-box (trusted with hr, acme)
+                                  ┌────────────────────────────────────┐
+                                  │ /data/hr  /data/acme               │
+                                  │ local model (DeepSeek) does the    │
+                                  │ private work; full outputs and     │
+                                  │ traces stay here                   │
+                                  └────────────────────────────────────┘
 ```
 
 ## One command
@@ -158,18 +164,45 @@ The reply row is chosen from labels and the ledger alone, before any private byt
 |-|-|-|
 | `core.py` | 175 | The six bricks. Pure: no I/O, no clock, no network |
 | `door.py` | 175 | The `offload` tool, served as MCP over HTTP on localhost. Asks `core.py` at every step |
-| `transport.py` | 80 | Carries out moves and runs over ssh. Calls the node's own model with constrained JSON decoding |
-| `route.py` | 97 | Localhost proxy to the cloud model. Strips the room's dummy key, injects the real one, can capture every request |
+| `transport.py` | 82 | Carries out moves and runs over ssh. Calls the node's own model with constrained JSON decoding and keeps its trace on the node |
+| `route.py` | 105 | Localhost proxy to the cloud model. Strips the room's dummy key, injects the real one, can capture every exchange |
 | `room.py` + `room/room.sb` | 37 + 110 | The sandbox. Deny by default, with the workspace, a throwaway HOME, and the two ports allowed. Refuses planted hardlinks |
 | `lego.py` | 51 | The CLI: door + route + room around one agent session |
-| **implementation** | **725** | |
+| **implementation** | **735** | under 1000, tests and verification excluded |
 | `verify/` | | Formal verification in Bend, with Python twins. See [`verify/README.md`](verify/README.md) |
 | `tests/` | | `test_core.py` (bricks), `test_room.py` (sandbox), `e2e.py` (real models), `report.py` |
 | `results/` | | Output of the last `./run`, including `REPORT.md` |
 
 ## Results
 
-RESULTS_PLACEHOLDER
+All numbers come from the last `./run`. [`results/REPORT.md`](results/REPORT.md) has every table, and each e2e row links to its trace.
+
+**Formal verification (Bend, every number cross-checked against the real `core.py`):**
+
+| Check | Size | Result |
+|-|-|-|
+| Brick laws | 70,656 cases | 0 failures |
+| Model check, all bricks | 512 trust topologies, 340,664 states | 0 violations of contain, noninterference or budget. A private answer is reachable in 504 topologies (the other 8 have no node that may hold hr) |
+| Model check, mutants | 6 bricks switched off × 512 topologies | caught in 448–511 topologies each. The rest are topologies where that brick has nothing to do |
+| Leak counting | 338,845 attack traces of up to 3 offloads, 16 secret worlds | every per-scope bound holds, sealed is never distinguished, at most 3 hr classes from 2 bits |
+
+Mutants on the standard topology, where FAIL@1 means the attack takes one offload:
+
+| Brick removed | contain | noninterference | budget | leak bound |
+|-|-|-|-|-|
+| none | holds | holds | holds | holds |
+| label | FAIL@1 | FAIL@1 | FAIL@1 | FAIL@1 (sealed) |
+| move | FAIL@1 | holds | holds | holds |
+| run | holds | FAIL@1 | holds | FAIL@1 |
+| shape | holds | FAIL@1 | holds | FAIL@1 |
+| budget (charge) | holds | holds | FAIL@1 | FAIL@1 |
+| clock | holds | FAIL@1 | holds | FAIL@1 |
+
+Every brick is load-bearing: removing any one breaks a property in one step.
+
+**Simulation** (8,192 sessions × 40 offloads per cell, 30 s reply time): a private question gets answered 15% of the time with 8 bits per session, 46% with 32 bits, and 77% with 64 bits. Raising the reply time to 120 s removes late answers but adds about 98 s of waiting.
+
+**Real models:** 9/9 cases pass. 61 canaries (names, salaries, contract code, Stripe key, legal memo) were scanned in every byte that crossed the route in both directions, with 0 hits. The scripted attacker's 12 tricks all got the expected row, shaped replies arrived at exactly 30.0 s, and refusals and receipts came back in under 0.1 s. In an earlier run, `drain` spent 8 of its 16 bits and learnt only that the salary was in [100k, 150k). In the run below, Claude declined after the safety classifier stopped its first try.
 
 ## What it defends against, and what it doesn't
 
@@ -183,7 +216,7 @@ RESULTS_PLACEHOLDER
 
 **Not covered:**
 
-- **Bits are bits.** 16 bits about hr can be the single bit that matters most. The allowance bounds the quantity, not the meaning, so set it per scope with that in mind.
+- **Bits are bits.** 16 bits about hr is enough for one exact salary if the agent asks `int[100000, 150000]`. The allowance bounds how much is learnt, not which facts, so size each scope's allowance with that in mind.
 - **The host is trusted.** All bytes between nodes pass through the Mac, and policy requires the Mac to be trusted with every scope.
 - **Sandbox scope.** The sandbox is macOS `sandbox-exec`. Its boundary is tested by probes, not proved.
 - **Local model quality.** If the local model miscounts, the answer is wrong but still shaped.
