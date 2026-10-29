@@ -1,3 +1,4 @@
+wrote runs/ref.json: mutants 7, allowances 9, topologies 512, catches 3072
 {
  "allowances": [
   {

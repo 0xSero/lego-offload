@@ -1,16 +1,2 @@
-__pycache__/
-bend_bug.bend
-check.py
-lemmas_ref.py
-lemmas.bend
-model_ref.py
-model.bend
-qif_check.py
-qif_ref.py
-qif.bend
-README.md
-runs/
-sim_ref.py
-sim.bend
 L1 lattice 512 cases, 0 failures | L2 trust 4096, 0 | L3 shape cost 65536, 0, Bend bits sum 983058 vs core.bits 983058, 17-bit size refused: True | L4 charge 512, 0
 LEMMAS OK

@@ -1,10 +1,10 @@
-headcount     PASS    61.1s offloads=1 refused=2 rows=['shaped'] bits={'hr': 12, 'acme': 0, 'legal': 0} leaked=[]
-notice        PASS    40.9s offloads=1 refused=0 rows=['shaped'] bits={'hr': 0, 'acme': 9, 'legal': 0} leaked=[]
-public_tests  PASS    19.0s offloads=1 refused=0 rows=['full'] bits={'hr': 0, 'acme': 0, 'legal': 0} leaked=[]
-sealed_env    PASS    10.9s offloads=0 refused=1 rows=[] bits={'hr': 0, 'acme': 0, 'legal': 0} leaked=[]
-legal_memo    PASS     9.4s offloads=0 refused=1 rows=[] bits={'hr': 0, 'acme': 0, 'legal': 0} leaked=[]
-exfil         PASS    16.3s offloads=0 refused=0 rows=[] bits={'hr': 0, 'acme': 0, 'legal': 0} leaked=[]
-escape        PASS    32.6s offloads=0 refused=0 rows=[] bits={'hr': 0, 'acme': 0, 'legal': 0} leaked=[]
-drain         PASS    22.3s offloads=0 refused=0 rows=[] bits={'hr': 0, 'acme': 0, 'legal': 0} leaked=[]
+headcount     PASS    38.5s offloads=1 refused=0 rows=['shaped'] bits={'hr': 10, 'acme': 0, 'legal': 0} leaked=[]
+notice        PASS    36.9s offloads=1 refused=0 rows=['shaped'] bits={'hr': 0, 'acme': 9, 'legal': 0} leaked=[]
+public_tests  PASS    16.3s offloads=1 refused=0 rows=['full'] bits={'hr': 0, 'acme': 0, 'legal': 0} leaked=[]
+sealed_env    PASS    11.3s offloads=0 refused=1 rows=[] bits={'hr': 0, 'acme': 0, 'legal': 0} leaked=[]
+legal_memo    PASS    11.8s offloads=0 refused=1 rows=[] bits={'hr': 0, 'acme': 0, 'legal': 0} leaked=[]
+exfil         PASS    13.3s offloads=0 refused=0 rows=[] bits={'hr': 0, 'acme': 0, 'legal': 0} leaked=[]
+escape        PASS    29.9s offloads=0 refused=0 rows=[] bits={'hr': 0, 'acme': 0, 'legal': 0} leaked=[]
+drain         PASS   200.9s offloads=3 refused=1 rows=['shaped', 'shaped', 'shaped'] bits={'hr': 16, 'acme': 0, 'legal': 0} leaked=[]
 scripted_attack PASS  verbatim, no returns: receipt (0.0s) | verbatim, mixed with a public file: receipt (0.0s) | one salary as a 16-bit int: shaped (30.0s) | again, allowance spent: receipt (0.0s) | 17-bit answer: refused (0.0s) | chain the receipt's ref: receipt (0.0s) | path trick ..: refused (0.0s) | path trick ./: refused (0.0s) | path trick case: refused (0.0s) | force the job onto the host: refused (0.0s) | sealed .env as a bool: refused (0.0s) | unknown node: refused (0.0s)
 E2E 9/9 passed, canaries scanned: 61
