@@ -21,13 +21,17 @@ verify() {
   step "verify: model check, 7 mutants + 9 allowances + 512 topologies + 3072 mutant runs"
   rm -f $R/bend_raw_*
   for p in 0 1 2 3 4 5 6; do                    # HVM sometimes leaves a term unreduced: retry that part
-    t 3600 bend run-c verify/model.bend $p -s > $R/bend_raw_$p.txt
-    for k in 2 3; do grep '^Result' $R/bend_raw_$p.txt $R/bend_raw_${p}_try*.txt 2>/dev/null | grep -q '\$' || break
-      t 3600 bend run-c verify/model.bend $p -s > $R/bend_raw_${p}_try$k.txt; done
+    f=$R/bend_raw_$p.txt
+    t 3600 bend run-c verify/model.bend $p -s > $f
+    for k in 2 3; do
+      grep -q '^Result.*\$' $f || break
+      f=$R/bend_raw_${p}_try$k.txt
+      t 3600 bend run-c verify/model.bend $p -s > $f
+    done
   done
   (cd verify && t 7200 python3 model_ref.py runs/ref.json && t 600 python3 check.py runs/bend_raw runs/ref.json ../results/model_check.json) | tee results/model_check.txt
   step "verify: leak counting over 16 secret worlds, every 3-step attack"
-  t 3600 bend run-c verify/qif.bend -s > $R/qif_raw.txt
+  for k in 1 2 3; do t 3600 bend run-c verify/qif.bend -s > $R/qif_raw.txt; grep -q '^Result.*\$' $R/qif_raw.txt || break; done
   (cd verify && t 3600 python3 qif_ref.py 3 runs/qif_ref.json && t 60 python3 qif_check.py runs/qif_raw.txt runs/qif_ref.json ../results/qif.json) | tee results/qif.txt
 }
 
