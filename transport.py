@@ -16,6 +16,8 @@ docs = "".join("\n--- %s ---\n%s" % (p, open(p, errors="replace").read()) for p 
 body = {"model": job["model"]["model"], "messages": [
     {"role": "system", "content": "You work for the owner of these files. Answer the task from the files only."},
     {"role": "user", "content": job["task"] + "\n" + docs}]}
+if job.get("salt"):
+    body["cache_salt"] = job["salt"]     # prompt cache shared only by jobs with the same scopes
 if job["schema"]:
     body["response_format"] = {"type": "json_schema", "json_schema": {"name": "answer", "schema": job["schema"]}}
 t0 = time.time()
@@ -64,11 +66,11 @@ def schema_json(s):
     return {"type": "object", "properties": {"answer": inner}, "required": ["answer"], "additionalProperties": False}
 
 
-def run_job(node, files, task, schema, out_path, keep, timeout):
+def run_job(node, files, task, schema, out_path, keep, timeout, salt=None):
     """Run one model call on `node` over `files` (paths on that node). The full output is
     written to out_path on the node; it comes back only when keep is False."""
     job = {"files": files, "task": task, "schema": schema_json(schema) if schema else None,
-           "model": node["model"], "out": out_path, "keep": keep, "timeout": timeout}
+           "model": node["model"], "out": out_path, "keep": keep, "timeout": timeout, "salt": salt}
     _sh(node, f"mkdir -p {shlex.quote(out_path.rsplit('/', 1)[0])}")
     raw = _sh(node, "python3 -c " + shlex.quote(RUNNER), data=json.dumps(job).encode(), timeout=timeout + 30)
     return json.loads(raw)

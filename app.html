@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lego</title>
+<style>
+:root { --bg: #ffffff; --fg: #1d1d1f; --dim: #6b6b70; --rule: #dcdcdf; --soft: #f4f4f6; --ok: #1f7a3a; --bad: #b42318;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace; --sans: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+@media (prefers-color-scheme: dark) { :root { --bg: #111113; --fg: #e8e8ea; --dim: #96969c; --rule: #2e2e33; --soft: #1b1b1f;
+  --ok: #5cc27a; --bad: #f07a6e; color-scheme: dark; } }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 var(--sans); }
+main { max-width: 1000px; margin: 0 auto; padding: 20px 16px 60px; }
+h1 { font-size: 20px; margin: 0; } h2 { font-size: 15px; margin: 28px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--rule); }
+.sub { color: var(--dim); font-family: var(--mono); font-size: 12px; margin: 2px 0 0; word-break: break-all; }
+code, pre, .mono { font-family: var(--mono); font-size: 12.5px; }
+table { border-collapse: collapse; width: 100%; table-layout: auto; } td.mono { word-break: break-all; } th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { color: var(--dim); font-weight: 500; font-size: 12px; }
+.agents { display: flex; gap: 14px; flex-wrap: wrap; margin: 4px 0 8px; }
+textarea { width: 100%; box-sizing: border-box; min-height: 84px; font: 13px var(--mono); padding: 8px; border: 1px solid var(--rule); background: var(--bg); color: var(--fg); }
+button { font: 13px var(--sans); padding: 5px 14px; border: 1px solid var(--fg); background: var(--bg); color: var(--fg); cursor: pointer; }
+button.primary { background: var(--fg); color: var(--bg); } button:disabled { opacity: .45; cursor: default; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.ex { color: var(--dim); font-size: 12.5px; } .ex a { color: var(--fg); cursor: pointer; text-decoration: underline dotted; margin-right: 10px; }
+.bar { height: 8px; background: var(--soft); border: 1px solid var(--rule); width: 160px; } .bar i { display: block; height: 100%; background: var(--fg); }
+pre { background: var(--soft); padding: 10px; white-space: pre-wrap; word-break: break-word; margin: 8px 0; max-height: 420px; overflow: auto; }
+.status { font-family: var(--mono); font-size: 12.5px; } .ok { color: var(--ok); } .bad { color: var(--bad); }
+.wrap { overflow-x: auto; } tr.pick { cursor: pointer; } tr.pick:hover td { background: var(--soft); }
+.note { color: var(--dim); font-size: 12.5px; max-width: 75ch; }
+</style>
+</head>
+<body>
+<main>
+<h1>lego</h1>
+<p class="sub" id="where"></p>
+
+<h2>Task</h2>
+<div class="agents" id="agents"></div>
+<textarea id="prompt" placeholder="What should the agent do? It can name the private files below; it cannot read them."></textarea>
+<div class="ex" id="examples"></div>
+<div class="row">
+  <button class="primary" id="run">Run</button>
+  <button id="reset">Refill allowances</button>
+  <span class="status" id="msg"></span>
+</div>
+<p class="note">The agent runs in the sandbox with no access to private files. It can only ask the door: public inputs come back in full, private ones come back as a receipt, or as one small typed answer that costs bits and arrives at a fixed time.</p>
+
+<h2>Allowance</h2>
+<div class="wrap"><table><thead><tr><th>scope</th><th>bits left</th><th></th></tr></thead><tbody id="ledger"></tbody></table></div>
+
+<h2>Current task</h2>
+<p class="status" id="state">No task yet.</p>
+<div class="wrap"><table><thead><tr><th>s</th><th>door</th><th>where</th><th>scopes</th><th>reply</th><th>bits</th><th>detail</th></tr></thead><tbody id="events"></tbody></table></div>
+<pre id="reply" hidden></pre>
+
+<h2>Files the agent can name</h2>
+<div class="wrap"><table><thead><tr><th>file</th><th>scopes</th></tr></thead><tbody id="catalog"></tbody></table></div>
+
+<h2>Nodes</h2>
+<div class="wrap"><table><thead><tr><th>node</th><th>trusted with</th><th>local model</th></tr></thead><tbody id="nodes"></tbody></table></div>
+
+<h2>Earlier tasks</h2>
+<div class="wrap"><table><thead><tr><th>#</th><th>agent</th><th>task</th><th>status</th><th>s</th><th>offloads</th><th>refused</th></tr></thead><tbody id="runs"></tbody></table></div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+let info = null, current = null, shown = null, agent = null;
+
+async function api(path, body) {
+  const r = await fetch(path, body ? {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)} : {});
+  return [r.status, await r.json()];
+}
+
+function examples(cat) {
+  const ref = s => (cat.find(c => c.scopes.includes(s)) || {}).ref;
+  const hr = ref("hr"), acme = ref("acme"), sealed = ref("sealed");
+  const ex = [];
+  if (hr) ex.push(["headcount", `Using the offload tool, find how many employees in ${hr} earn more than 150000. End your reply with just the number.`]);
+  if (acme) ex.push(["notice period", `Using the offload tool, find how many days of notice ${acme} requires for termination. End with just the number.`]);
+  if (sealed) ex.push(["sealed file", `Use the offload tool to check whether STRIPE_KEY in ${sealed} starts with sk_live. Report what the tool returns.`]);
+  ex.push(["public file", "Use the offload tool to have the local model summarise README.md (pass it as an input). Report the summary."]);
+  $("examples").innerHTML = "examples: " + ex.map((e, i) => `<a data-i="${i}">${esc(e[0])}</a>`).join("");
+  $("examples").querySelectorAll("a").forEach(a => a.onclick = () => { $("prompt").value = ex[a.dataset.i][1]; });
+}
+
+function render() {
+  $("where").textContent = `workspace ${info.workspace} · shaped answers at ${info.deadline} s`;
+  if (!$("agents").children.length) {
+    agent = info.agents[0];
+    $("agents").innerHTML = info.agents.map(a => `<label><input type="radio" name="agent" value="${a}" ${a === agent ? "checked" : ""}> ${a}</label>`).join("")
+      || "<span class='bad'>No agent CLI found (claude, codex, cursor-agent, cline).</span>";
+    document.querySelectorAll("input[name=agent]").forEach(r => r.onchange = () => { agent = r.value; });
+    examples(info.catalog);
+  }
+  $("ledger").innerHTML = Object.entries(info.allowance).map(([s, max]) => {
+    const left = info.ledger[s] ?? 0;
+    return `<tr><td>${esc(s)}</td><td class="mono">${left} / ${max}</td><td><div class="bar"><i style="width:${100 * left / Math.max(1, max)}%"></i></div></td></tr>`;
+  }).join("") + `<tr><td>sealed</td><td class="mono">never</td><td></td></tr>`;
+  $("catalog").innerHTML = info.catalog.map(c => `<tr><td class="mono">${esc(c.ref)}</td><td>${esc(c.scopes.join(", ") || "public")}</td></tr>`).join("")
+    + info.public.map(p => `<tr><td class="mono">${esc(p.slice(info.workspace.length + 1))}</td><td>public (workspace)</td></tr>`).join("");
+  $("nodes").innerHTML = Object.entries(info.nodes).map(([n, v]) => `<tr><td>${esc(n)}</td><td>${esc(v.trust.join(", ") || "nothing")}</td><td class="mono">${esc(v.model || "-")}</td></tr>`).join("");
+  $("runs").innerHTML = info.runs.slice().reverse().map(r => `<tr class="pick" data-id="${r.id}"><td>${r.id + 1}</td><td>${esc(r.agent)}</td><td>${esc(r.prompt.slice(0, 90))}</td><td>${esc(r.status)}</td><td class="mono">${r.elapsed}</td><td>${r.offloads}</td><td>${r.refused}</td></tr>`).join("");
+  $("runs").querySelectorAll("tr").forEach(tr => tr.onclick = () => { shown = +tr.dataset.id; poll(); });
+  $("run").disabled = info.busy || !info.agents.length;
+}
+
+function event(e, t0) {
+  const s = (e.t - t0).toFixed(1);
+  if (e.op === "offload") return `<tr><td class="mono">${s}</td><td>offload</td><td>${esc(e.node)}</td><td>${esc(e.scopes.join(", ") || "public")}</td><td><b>${esc(e.row)}</b></td><td>${e.bits}</td><td class="mono">${esc(e.inputs.join(" "))}</td></tr>`;
+  if (e.op === "refused") return `<tr><td class="mono">${s}</td><td class="bad">refused</td><td></td><td></td><td></td><td>0</td><td>${esc(e.reason)}</td></tr>`;
+  if (e.op === "done") return `<tr><td class="mono">${s}</td><td>job done</td><td></td><td></td><td></td><td></td><td class="mono">${e.took} s on the node</td></tr>`;
+  return `<tr><td class="mono">${s}</td><td>${esc(e.op)}</td><td colspan="5">${esc(e.error || "")}</td></tr>`;
+}
+
+async function poll() {
+  const [, i] = await api("/api/info");
+  info = i; render();
+  const id = shown ?? current;
+  if (id == null) return;
+  const [code, r] = await api(`/api/run/${id}`);
+  if (code !== 200) return;
+  const t0 = r.events.length ? Math.min(...r.events.map(e => e.t)) : 0;
+  $("state").innerHTML = `#${r.id + 1} · ${esc(r.agent)} · <span class="${r.status === "done" ? "ok" : r.status === "running" ? "" : "bad"}">${esc(r.status)}</span> · ${r.elapsed} s · `
+    + `${r.offloads} offloads, ${r.refused} refused · ${r.route_calls} model calls through the route (${(r.route_bytes / 1024).toFixed(0)} KB)`;
+  $("events").innerHTML = r.events.map(e => event(e, t0)).join("") || `<tr><td colspan="7" class="note">The door has not been called yet.</td></tr>`;
+  $("reply").hidden = !r.reply;
+  $("reply").textContent = r.reply;
+}
+
+$("run").onclick = async () => {
+  const [code, r] = await api("/api/run", {agent, prompt: $("prompt").value});
+  $("msg").textContent = code === 200 ? "" : r.error;
+  if (code === 200) { current = r.id; shown = null; }
+  poll();
+};
+$("reset").onclick = async () => { await api("/api/reset", {}); poll(); };
+poll(); setInterval(poll, 1500);
+</script>
+</body>
+</html>

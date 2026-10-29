@@ -6,6 +6,7 @@ import http.client
 import json
 import os
 import subprocess
+import sys
 import threading
 import time
 import zlib
@@ -15,42 +16,85 @@ HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", 
        "transfer-encoding", "upgrade", "host", "content-length", "x-api-key", "authorization"}
 
 
-def claude_token():
+def keychain(service):
+    return subprocess.run(["/usr/bin/security", "find-generic-password", "-s", service, "-w"],
+                          capture_output=True, text=True, timeout=15, check=True).stdout.strip()
+
+
+def claude_auth():
     """The Claude Code OAuth token, from its credentials file or the macOS keychain."""
     path = os.path.expanduser("~/.claude/.credentials.json")
-    raw = open(path).read() if os.path.exists(path) else subprocess.run(
-        ["/usr/bin/security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
-        capture_output=True, text=True, timeout=15, check=True).stdout
-    return json.loads(raw)["claudeAiOauth"]["accessToken"]
+    raw = open(path).read() if os.path.exists(path) else keychain("Claude Code-credentials")
+    return {"Authorization": "Bearer " + json.loads(raw)["claudeAiOauth"]["accessToken"]}
 
 
-def zai_key():
+def codex_auth():
+    """Codex's ChatGPT login (~/.codex/auth.json)."""
+    t = json.load(open(os.path.expanduser("~/.codex/auth.json")))["tokens"]
+    return {"Authorization": "Bearer " + t["access_token"], "chatgpt-account-id": t["account_id"]}
+
+
+def cursor_auth():
+    """Cursor's CLI login, from the macOS keychain."""
+    return {"Authorization": "Bearer " + keychain("cursor-access-token")}
+
+
+def openrouter_auth():
+    """The OpenRouter key Cline is configured with."""
+    return {"Authorization": "Bearer " + json.load(open(os.path.expanduser("~/.cline/data/secrets.json")))["openRouterApiKey"]}
+
+
+def zai_auth():
     """providers.zai.apiKey from omp's models.yml (stdlib scan, no yaml dependency)."""
     inside = False
     for line in open(os.path.expanduser("~/.omp/agent/models.yml")):
         if line.startswith("  ") and not line.startswith("   ") and line.strip().endswith(":"):
             inside = line.strip() == "zai:"
         elif inside and line.strip().startswith("apiKey:"):
-            return line.split(":", 1)[1].strip().strip("'\"")
+            return {"Authorization": "Bearer " + line.split(":", 1)[1].strip().strip("'\"")}
     raise RuntimeError("providers.zai.apiKey not found")
 
 
-UPSTREAMS = {"anthropic": ("api.anthropic.com", ("/v1/",), claude_token, "oauth-2025-04-20"),
-             "zai": ("api.z.ai", ("/api/coding/paas/v4/",), zai_key, None)}
+# name: (host, path prefixes the agent may use, headers carrying the real credential, anthropic-beta to add)
+UPSTREAMS = {"anthropic": ("api.anthropic.com", ("/v1/",), claude_auth, "oauth-2025-04-20"),
+             "codex": ("chatgpt.com", ("/backend-api/codex/",), codex_auth, None),
+             "cursor": ("api2.cursor.sh", ("/",), cursor_auth, None),
+             "openrouter": ("openrouter.ai", ("/api/v1/",), openrouter_auth, None),
+             "zai": ("api.z.ai", ("/api/coding/paas/v4/",), zai_auth, None)}
+
+
+def gunzip(b):
+    return zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(b)
+
+
+def readable(raw, enc=""):
+    """Undo compression so captures can be scanned: whole-body gzip, or Connect envelopes
+    (1 flag byte, 4 length bytes; flag bit 1 = gzipped) as Cursor sends them."""
+    try:
+        if enc == "gzip" or raw[:2] == b"\x1f\x8b":
+            return gunzip(raw)
+        out, i = [], 0
+        while i + 5 <= len(raw) and raw[i] in (0, 1, 2, 3):
+            n = int.from_bytes(raw[i + 1:i + 5], "big")
+            part = raw[i + 5:i + 5 + n]
+            out.append(gunzip(part) if raw[i] & 1 else part)
+            i += 5 + n
+        return b"\n".join(out) if out and i == len(raw) else raw
+    except (zlib.error, ValueError):
+        return raw
 
 
 def serve(port, upstream="anthropic", capture=None):
     host, prefixes, secret, beta = UPSTREAMS[upstream]
     cache, lock = {}, threading.Lock()
-    secret_now = lambda: cache.get("v") if time.time() - cache.get("t", 0) < 120 else None
 
-    def token():
+    def creds():
         with lock:
-            if not secret_now():
+            if time.time() - cache.get("t", 0) > 120:
                 cache.update(v=secret(), t=time.time())
             return cache["v"]
 
-    token()                                            # fail fast; the value is never printed
+    creds()                                            # fail fast; the value is never printed
 
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -58,19 +102,41 @@ def serve(port, upstream="anthropic", capture=None):
         def log_message(self, *a):
             pass
 
+        def body(self):
+            if self.headers.get("transfer-encoding", "").lower() != "chunked":
+                return self.rfile.read(int(self.headers.get("content-length") or 0))
+            out = []
+            while n := int(self.rfile.readline().split(b";")[0], 16):
+                out.append(self.rfile.read(n)), self.rfile.readline()
+            self.rfile.readline()
+            return b"".join(out)
+
         def forward(self):
-            body = self.rfile.read(int(self.headers.get("content-length") or 0))
+            body = self.body()
             if not self.path.startswith(prefixes):
                 self.send_response(404), self.send_header("content-length", "0"), self.end_headers()
                 return
-            hdrs = {k: v for k, v in self.headers.items() if k.lower() not in HOP | {"anthropic-beta"}}
+            real = creds()
+            drop = HOP | {"anthropic-beta"} | {k.lower() for k in real}
+            hdrs = {k: v for k, v in self.headers.items() if k.lower() not in drop}
             betas = [b.strip() for b in self.headers.get("anthropic-beta", "").split(",") if b.strip()]
             if beta and beta not in betas:
                 betas.append(beta)
             if betas:
                 hdrs["anthropic-beta"] = ",".join(betas)
-            hdrs.update({"Authorization": "Bearer " + token(), "Host": host, "Content-Length": str(len(body))})
-            conn, got, status, enc = http.client.HTTPSConnection(host, 443, timeout=600), [], None, ""
+            hdrs.update({**real, "Host": host, "Content-Length": str(len(body))})
+            got, status, enc = [], None, ""
+            for attempt in range(3):                       # DNS on this host flakes; nothing was sent yet
+                conn = http.client.HTTPSConnection(host, 443, timeout=600)
+                try:
+                    conn.connect()
+                    break
+                except OSError:
+                    conn.close()
+                    if attempt == 2:
+                        self.send_response(502), self.send_header("content-length", "0"), self.end_headers()
+                        return
+                    time.sleep(1)
             try:
                 conn.request(self.command, self.path, body=body, headers=hdrs)
                 r = conn.getresponse()
@@ -86,20 +152,26 @@ def serve(port, upstream="anthropic", capture=None):
                     self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                     self.wfile.flush()
                 self.wfile.write(b"0\r\n\r\n")
+            except (BrokenPipeError, ConnectionResetError):
+                pass                                       # the agent hung up mid-stream
             finally:
                 conn.close()
                 if capture:                                # one JSON line per exchange: what left, what came back
-                    raw = b"".join(got)
-                    if enc == "gzip":
-                        raw = zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(raw)
                     rec = {"t": time.time(), "path": self.path, "status": status,
-                           "request": body.decode(errors="replace"), "response": raw.decode(errors="replace")}
+                           "request": readable(body).decode(errors="replace"),
+                           "response": readable(b"".join(got), enc).decode(errors="replace")}
                     with lock, open(capture, "a") as f:
                         f.write(json.dumps(rec) + "\n")
 
-        do_GET = do_POST = forward
+        do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = forward
 
-    srv = ThreadingHTTPServer(("127.0.0.1", port), H)
-    srv.daemon_threads = True
+    class Server(ThreadingHTTPServer):
+        daemon_threads = True
+
+        def handle_error(self, request, addr):         # an agent hanging up is not an error
+            if not isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError)):
+                super().handle_error(request, addr)
+
+    srv = Server(("127.0.0.1", port), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv

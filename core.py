@@ -9,6 +9,7 @@ Types:  Scope = str      a name such as "hr"; an empty scope set means public
         Item(ref, scopes, node)    some data, its scopes, the machine holding the bytes
 Bricks: label  move  run  shape  charge  clock      (release composes the last three)
 """
+import hashlib
 import math
 import posixpath
 import unicodedata
@@ -87,6 +88,13 @@ def run(inputs, node, ref):
     if not may_hold(node, scopes):
         raise Refused(f"{node.name} is not trusted with {sorted(scopes)}")
     return Item(ref, scopes, node.name)
+
+
+def salt(key, scopes):
+    """A node's prompt cache is state its jobs share: a hit makes a reply faster. Jobs share it
+    only with jobs of the same scopes under the same key (one key per session), so no reply
+    time depends on another scope's data. Sent to the node as vLLM's cache_salt."""
+    return hashlib.sha256(f"{key}:{','.join(sorted(scopes))}".encode()).hexdigest()[:32]
 
 
 # ---------- 4. shape: a finite answer set declared before the job runs ----------

@@ -18,11 +18,14 @@ def table(head, rows):
 
 out = ["# Lego offload: results\n"]
 root = R.parent
-src = ["core.py", "door.py", "transport.py", "route.py", "room.py", "lego.py", "room/room.sb"]
+src = ["core.py", "door.py", "transport.py", "route.py", "room.py", "agents.py", "lego.py", "room/room.sb"]
 loc = {f: sum(1 for _ in open(root / f)) for f in src}
 out += [f"Implementation: {sum(loc.values())} lines ({', '.join(f'{f} {n}' for f, n in loc.items())}).",
         "commit: " + subprocess.run(["git", "-C", str(root), "rev-parse", "--short", "HEAD"],
                                     capture_output=True, text=True).stdout.strip() + "\n"]
+
+if ag := load("agents.txt"):
+    out += ["## Agent adapters (no model): credentials and wiring of every room\n", "```", ag.strip(), "```\n"]
 
 if lem := load("lemmas.txt"):
     out += ["## Brick laws (Bend, checked against core.py)\n", "```", lem.strip(), "```\n"]
@@ -46,6 +49,13 @@ if q := load("qif.json"):
                   [[x["variant"], x["traces"], x["A_hr"], x["B_acme"], x["S_sealed"], x["T_total"],
                     x["max_hr_classes"], x["bend_matches"]] for x in q]), ""]
 
+if c := load("cache.json"):
+    out += ["## Shared prompt cache (8 secret worlds, every attack of up to 4 jobs)\n",
+            "A trace holds when the reply times of public jobs are the same in every secret world.\n",
+            table(["variant", "traces", "violating", "noninterference", "max classes", "Bend = core"],
+                  [[x["variant"], x["traces"], x["violating"], x["first_violation"], x["max_classes"], x["bend_matches"]]
+                   for x in c]), ""]
+
 if s := load("sim.json"):
     out += ["## Simulation (8192 sessions per cell, 40 offloads each)\n",
             table(["bits/session", "reply time", "answered", "late (UNKNOWN)", "over budget", "mean extra wait"],
@@ -54,21 +64,24 @@ if s := load("sim.json"):
                     "-" if x["mean_extra_wait_s"] is None else f"{x['mean_extra_wait_s']:.1f}s"] for x in s]), ""]
 
 if e := load("e2e.json"):
-    out += [f"## Real models ({e['date']})\n", f"Cloud agent: {e['cloud_agent']}. Local model: {e['local_model']}. "
-            f"{e['canaries']} canaries scanned in every byte that crossed the route, both directions. "
-            f"**{e['passed']}/{len(e['cases'])} passed.**\n",
-            table(["case", "pass", "s", "offloads", "replies", "refused", "bits charged", "bytes via route", "leaked"],
-                  [[f"[{c['case']}](traces/{c['case']}.md)", "PASS" if c["pass"] else "FAIL", c["seconds"],
-                    c["offloads"], " ".join(c["rows"]) or "-",
-                    c["refused"], " ".join(f"{k}:{v}" for k, v in c["bits_charged"].items() if v) or "0",
-                    c["cloud_bytes"], ", ".join(c["leaked"]) or "none"] for c in e["cases"]]), ""]
+    model = [c for c in e["cases"] if c["agent"] != "-"]
+    names = list(dict.fromkeys(c["case"] for c in model))
+    cell = lambda c: f"[{'PASS' if c['pass'] else 'FAIL'}](traces/{c['agent']}/{c['case']}.md)"
+    out += [f"## Real models ({e['date']})\n", f"Local model: {e['local_model']}. {e['canaries']} canaries scanned in "
+            f"every byte that crossed the route, both directions, decompressed. **{e['passed']}/{len(e['cases'])} passed.**\n",
+            table(["agent"] + names, [[a] + [next((cell(c) for c in model if c["agent"] == a and c["case"] == n), "-")
+                                         for n in names] for a in e["agents"]]), "",
+            table(["agent", "case", "s", "offloads", "replies", "refused", "bits charged", "bytes via route", "leaked"],
+                  [[c["agent"], c["case"], c["seconds"], c["offloads"], " ".join(c["rows"]) or "-", c["refused"],
+                    " ".join(f"{k}:{v}" for k, v in c["bits_charged"].items() if v) or "0", c["cloud_bytes"],
+                    ", ".join(c["leaked"]) or "none"] for c in model]), ""]
     for c in e["cases"]:
         if "tries" in c:
             out += [f"### scripted attacker on the door ({len(c['tries'])} tricks, reply times {c['shaped_reply_s']} s "
                     f"for shaped answers, at most {c['max_other_reply_s']:.1f} s otherwise)\n",
                     table(["trick", "expected", "got", "s"],
                           [[t["try"], t["want"], t["got"], t["seconds"]] for t in c["tries"]]), ""]
-    out += ["### What the agent said at the end of each case\n"]
-    out += [f"**{c['case']}**: " + " ".join(c["reply"].split())[-400:] + "\n" for c in e["cases"] if "tries" not in c]
+    out += ["### What each agent said at the end of each case\n"]
+    out += [f"**{c['agent']} / {c['case']}**: " + " ".join(c["reply"].split())[-300:] + "\n" for c in model]
 
 print("\n".join(out))

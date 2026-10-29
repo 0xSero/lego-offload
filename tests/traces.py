@@ -54,26 +54,99 @@ def show(block):
     return f"[{t}]"
 
 
+def turns_anthropic(req, resp):
+    out = []
+    for m in req["messages"] + [{"role": "assistant", "content": sse(resp)}]:
+        content = m["content"] if isinstance(m["content"], list) else [{"type": "text", "text": m["content"]}]
+        out.append((m["role"], [show(b) for b in content]))
+    return out
+
+
+def turns_responses(req, resp):
+    """OpenAI Responses API (Codex): input items, then the streamed output items."""
+    done = [json.loads(l[6:])["item"] for l in resp.splitlines()
+            if l.startswith("data: ") and '"response.output_item.done"' in l]
+    out = []
+    for it in req.get("input", []) + done:
+        t = it.get("type")
+        if t == "message":
+            out.append((it["role"], [clean(c.get("text", "")) for c in it.get("content", [])]))
+        elif t == "function_call":
+            out.append(("assistant", [show({"type": "tool_use", "name": it["name"],
+                                            "input": json.loads(it.get("arguments") or "{}")})]))
+        elif t == "function_call_output":
+            out.append(("user", [show({"type": "tool_result", "content": str(it.get("output"))})]))
+        elif t == "reasoning":
+            out.append(("assistant", ["> *reasoning:* " + clean(" ".join(x.get("text", "") for x in it.get("summary", [])))
+                                      or "> *reasoning (encrypted)*"]))
+    return out
+
+
+def turns_chat(req, resp):
+    """OpenAI chat completions (Cline): messages, then the streamed reply."""
+    text, calls = "", {}
+    for l in resp.splitlines():
+        if l.startswith("data: {"):
+            for ch in json.loads(l[6:]).get("choices", []):
+                d = ch.get("delta", {})
+                text += d.get("content") or ""
+                for tc in d.get("tool_calls") or []:
+                    c = calls.setdefault(tc["index"], {"name": "", "args": ""})
+                    c["name"] += tc.get("function", {}).get("name") or ""
+                    c["args"] += tc.get("function", {}).get("arguments") or ""
+    out = []
+    for m in req.get("messages", []):
+        c = m.get("content")
+        c = "\n".join(x.get("text", "") for x in c) if isinstance(c, list) else c or ""
+        body = [show({"type": "tool_result", "content": c})] if m["role"] == "tool" else [clean(c)] if c else []
+        body += [f"**→ {t['function']['name']}**\n```json\n{clean(t['function']['arguments'], 1500)}\n```"
+                 for t in m.get("tool_calls") or []]
+        out.append((m["role"], body))
+    out.append(("assistant", ([clean(text)] if text else []) +
+                [f"**→ {c['name']}**\n```json\n{clean(c['args'], 1500)}\n```" for c in calls.values()]))
+    return out
+
+
 def cloud(capture):
     recs = [json.loads(l) for l in open(capture)] if capture else []
-    convo = [r for r in recs if r["path"].startswith("/v1/messages") and r["request"].startswith("{")]
+    if any(r["path"].startswith(("/aiserver.", "/agent.")) for r in recs):
+        return cursor_view(recs)
+    convo = [r for r in recs if r["request"].startswith("{") and
+             any(k in r["path"] for k in ("/v1/messages", "/responses", "/chat/completions"))]
     if not convo:
         return ["*(no cloud model in this case)*"]
     reqs = [json.loads(r["request"]) for r in convo]
-    main = max(range(len(reqs)), key=lambda i: (len(reqs[i].get("messages", [])), i))
-    req = reqs[main]
-    sys_len = sum(len(b.get("text", "")) for b in req.get("system", [])) if isinstance(req.get("system"), list) \
-        else len(req.get("system") or "")
+    size = lambda q: len(q.get("messages") or q.get("input") or [])
+    main = max(range(len(reqs)), key=lambda i: (size(reqs[i]), i))
+    req, resp, path = reqs[main], convo[main]["response"], convo[main]["path"]
+    tools = req.get("tools") or [t for it in req.get("input", []) if it.get("type") == "additional_tools"
+                                 for t in it.get("tools", [])]
+    kind = turns_anthropic if "/v1/messages" in path else turns_responses if "/responses" in path else turns_chat
     out = [f"{len(convo)} model calls through the route; main thread is call {main + 1} "
-           f"(model `{req.get('model')}`, system prompt {sys_len} chars, tools: "
-           f"{', '.join(t.get('name', '?') for t in req.get('tools', []))}).\n"]
-    for m in req["messages"] + [{"role": "assistant", "content": sse(convo[main]["response"])}]:
-        content = m["content"] if isinstance(m["content"], list) else [{"type": "text", "text": m["content"]}]
-        if m["role"] not in ("user", "assistant"):              # harness context (environment, tool lists)
-            out.append(f"#### {m['role']}\n[harness context, {len(json.dumps(content))} chars, not shown]")
-            continue
-        out.append(f"#### {m['role']}\n" + "\n\n".join(show(b) for b in content))
+           f"(model `{req.get('model')}`, tools: "
+           f"{', '.join(t.get('name') or t.get('function', {}).get('name', '?') for t in tools)}).\n"]
+    for role, body in kind(req, resp):
+        if role not in ("user", "assistant", "tool"):          # harness context (system prompt, environment)
+            out.append(f"#### {role}\n[harness context, {sum(len(b) for b in body)} chars, not shown]")
+        else:
+            out.append(f"#### {role}\n" + "\n\n".join(body))
     return out
+
+
+def cursor_view(recs):
+    """Cursor speaks protobuf; show the readable strings of the agent conversation, in order."""
+    seen, lines = set(), []
+    for r in recs:
+        if "BidiAppend" not in r["path"] and "RunSSE" not in r["path"]:
+            continue
+        for side in ("request", "response"):
+            for m in re.findall(r"[\x20-\x7e\n\t\u00a0-\uffff]{12,}", r[side]):
+                m = m.strip()
+                if " " in m and m not in seen and "\ufffd" not in m:
+                    seen.add(m)
+                    lines.append(("→ cloud" if side == "request" else "← cloud", m))
+    return [f"{len(recs)} exchanges over Cursor's protobuf API; readable strings of the agent conversation "
+            f"({len(lines)}), in order:\n"] + [f"**{d}**\n```\n{clean(m, 1500)}\n```" for d, m in lines[:120]]
 
 
 def local(jobs):
@@ -102,5 +175,5 @@ def render(name, prompt, capture, jobs, row):
                         f"offloads {row['offloads']} · refused {row['refused']} · bits {row['bits_charged']} · "
                         f"leaked {row['leaked'] or 'none'}",
                         "**prompt to the agent:** " + clean(prompt),
-                        "## Cloud side: Claude Code in the room (everything that crossed the route)"] + cloud(capture)
+                        "## Cloud side: the agent in the room (everything that crossed the route)"] + cloud(capture)
                        + ["## Private side: the local model on gpu-box (never left the node)"] + local(jobs)) + "\n"

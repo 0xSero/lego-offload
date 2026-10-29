@@ -1,9 +1,9 @@
-;; room.sb -- deny-by-default Room for a headless coding agent (Claude Code).
+;; room.sb -- deny-by-default Room for a coding agent (Claude Code, Codex, Cursor, Cline).
 ;;
 ;; Parameters (all required, pass with sandbox-exec -D NAME=value):
 ;;   WS          workspace dir (read/write), realpath, e.g. /private/tmp/room/ws
 ;;   HOME_DIR    throwaway HOME (read/write), realpath
-;;   AGENT_BIN   realpath of the agent binary (claude: ~/.local/share/claude/versions/X)
+;;   AGENT_DIR   realpath of the directory holding the agent and its runtime (read + exec)
 ;;   ROUTE_PORT  localhost port of the Route (API proxy)
 ;;   DOOR_PORT   localhost port of the Door (MCP HTTP server)
 ;;
@@ -16,7 +16,7 @@
 ;; ---------------------------------------------------------------- process
 (allow process-fork)
 (allow process-exec
-       (literal (param "AGENT_BIN"))
+       (subpath (param "AGENT_DIR"))
        (subpath "/bin")
        (subpath "/usr/bin")
        (literal "/usr/libexec/path_helper"))
@@ -60,7 +60,7 @@
        (subpath "/usr/bin")
        (subpath "/private/var/db/timezone")
        (subpath "/private/var/select")
-       (literal (param "AGENT_BIN")))
+       (subpath (param "AGENT_DIR")))
 
 (allow file-read*
        (literal "/")
@@ -80,7 +80,7 @@
        (literal "/etc") (literal "/tmp") (literal "/var")
        (path-ancestors (param "WS"))
        (path-ancestors (param "HOME_DIR"))
-       (path-ancestors (param "AGENT_BIN")))
+       (path-ancestors (param "AGENT_DIR")))
 
 ;; ---------------------------------------------------------------- files: read/write
 (allow file-read* file-write*
@@ -108,3 +108,13 @@
        (global-name "com.apple.system.notification_center")
        (global-name "com.apple.system.logger")
        (global-name "com.apple.logd"))
+
+;; Codex asks cfprefsd for its own (possibly MDM-managed) settings at start. Only that
+;; domain is readable; cfprefsd checks every other domain against this profile.
+(allow mach-lookup
+       (global-name "com.apple.cfprefsd.daemon")
+       (global-name "com.apple.cfprefsd.agent"))
+(allow user-preference-read
+       (preference-domain "com.openai.codex"))
+(allow ipc-posix-shm-read-data
+       (ipc-posix-name-regex #"^apple\.cfprefs\.[0-9a-z]+v1$"))

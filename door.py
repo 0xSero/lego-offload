@@ -36,10 +36,14 @@ class Door:
         core.check_policy(self.public, self.scopes)
         if not set(self.scopes.values()) | {core.SEALED} <= self.nodes[policy["host"]].trust:
             raise core.Refused("the host must be trusted with every scope: all bytes pass through it")
+        if policy["nodes"][policy["host"]].get("model"):
+            raise core.Refused("the host runs the room, so it cannot also run a model: the agent could time "
+                               "the model's work through the shared CPU and GPU")
         self.ledger_file = self.state / "ledger.json"
         if not self.ledger_file.exists():
             self.reset()
         self.refs = {}                                          # result ref -> scopes
+        self.salt_key = secrets.token_hex(16)                   # see core.salt
         self.log = (self.state / "door.jsonl").open("a")
 
     # ---------- state ----------
@@ -113,7 +117,8 @@ class Door:
                      for i in items]
             core.run(moved, self.nodes[n], out.ref)
             r = transport.run_job(node, files, task, returns, out.ref.partition(":")[2], keep=row == "receipt",
-                                  timeout=self.p["deadline"] if row == "shaped" else self.p.get("job_timeout", 600))
+                                  timeout=self.p["deadline"] if row == "shaped" else self.p.get("job_timeout", 600),
+                                  salt=core.salt(self.salt_key, out.scopes))
             self._note(op="done", ref=out.ref, took=round(r["took"], 2))
             return r
         except Exception as e:                                 # never echo private detail to the cloud

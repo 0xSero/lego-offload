@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # One command for everything: ./run            (or ./run unit|verify|sim|e2e)
-# unit    brick tests, and the sandbox room probed with plain binaries (no model)
-# verify  Bend: brick laws, every-topology model check, 16-world leak counting; each
-#         cross-checked against a Python twin that drives the real core.py
+# unit    brick tests, the sandbox room probed with plain binaries, and every agent adapter
+#         checked for credentials and wiring (no model)
+# verify  Bend: brick laws, every-topology model check, 16-world leak counting, the shared
+#         prompt cache; each cross-checked against a Python twin that drives the real core.py
 # sim     Bend Monte Carlo of a working day (budget x reply time), checked bit-exact
-# e2e     real models: private data on gpu-box, Claude Code in the sandbox room
+# e2e     real models: private data on gpu-box; Claude Code, Codex, Cursor and Cline each in
+#         the sandbox room
 set -euo pipefail
 cd "$(dirname "$0")"
 R=verify/runs
@@ -12,7 +14,12 @@ mkdir -p "$R" results
 t() { perl -e "alarm $1; exec @ARGV or die qq(cannot run \$ARGV[0]\n)" "${@:2}"; }   # hard timeout on every step
 step() { printf '\n== %s\n' "$*"; }
 
-unit() { step unit; t 300 python3 tests/test_core.py | tee results/unit.txt; t 300 python3 tests/test_room.py | tee results/room.txt; }
+unit() {
+  step unit
+  t 300 python3 tests/test_core.py | tee results/unit.txt
+  t 300 python3 tests/test_room.py | tee results/room.txt
+  t 300 python3 tests/test_agents.py | tee results/agents.txt
+}
 
 verify() {
   step "verify: brick laws"
@@ -33,6 +40,9 @@ verify() {
   step "verify: leak counting over 16 secret worlds, every 3-step attack"
   for k in 1 2 3; do t 3600 bend run-c verify/qif.bend -s > $R/qif_raw.txt; grep -q '^Result.*\$' $R/qif_raw.txt || break; done
   (cd verify && t 3600 python3 qif_ref.py 3 runs/qif_ref.json && t 60 python3 qif_check.py runs/qif_raw.txt runs/qif_ref.json ../results/qif.json) | tee results/qif.txt
+  step "verify: shared prompt cache over 8 secret worlds, every 4-job attack"
+  for k in 1 2 3; do t 600 bend run-c verify/cache.bend -s > $R/cache_raw.txt; grep -q '^Result.*\$' $R/cache_raw.txt || break; done
+  (cd verify && t 600 python3 cache_ref.py runs/cache_raw.txt ../results/cache.json) | tee results/cache.txt
 }
 
 sim() {
@@ -41,7 +51,7 @@ sim() {
   (cd verify && t 900 python3 sim_ref.py runs/sim_raw.txt ../results/sim.json) | tee results/sim.txt
 }
 
-e2e() { step "e2e: real models"; t 7200 python3 tests/e2e.py results/e2e.json | tee results/e2e.txt; }
+e2e() { step "e2e: real models, every agent"; t 14400 python3 tests/e2e.py results/e2e.json | tee results/e2e.txt; }
 
 case "${1:-all}" in
   unit) unit ;; verify) verify ;; sim) sim ;; e2e) e2e ;;

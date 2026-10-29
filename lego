@@ -1,0 +1,3 @@
+#!/bin/sh
+# lego AGENT [args...]  (see lego.py for the full usage)
+exec python3 "$(dirname "$(realpath "$0")")/lego.py" "$@"

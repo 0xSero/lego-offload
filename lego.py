@@ -1,51 +1,83 @@
 """lego: run a cloud coding agent in the room, with private work offloaded through the door.
 
-usage: python3 lego.py POLICY.json [claude args...]     e.g. -p "How many ...?" --output-format json
-       python3 lego.py POLICY.json --reset              refill every scope's allowance
+usage: lego [--policy FILE] AGENT [agent args...]   AGENT: claude | codex | cursor | cline
+       lego [--policy FILE] reset                  refill every scope's allowance
+       lego [--policy FILE] app [PORT]             the web app (default port 8470)
+       lego app --demo [PORT]                      the web app on synthetic data (gpu-box)
 
-The policy (see tests/e2e.py for a full one) names the nodes, what each may hold, which
-directories carry which scope, the public files, the allowances and the reply deadline.
-State (ledger, door log) lives in .lego/ next to the policy.
+  lego claude --dangerously-skip-permissions
+  lego codex --dangerously-bypass-approvals-and-sandbox
+  lego cursor -p "How many people earn over 100k?" --yolo
+  lego cline -y "Is the STRIPE_KEY a live key?"
+
+The policy (default: $LEGO_POLICY, ./lego.json, then ~/.lego/policy.json; see
+examples/policy.json) names the nodes, what each may hold, which directories carry which
+scope, the public files, the allowances and the reply deadline. The agent's workspace is
+the policy's "workspace", or the current directory. State lives in .lego/ next to the policy.
 """
 import json
+import os
 import shutil
 import sys
 import tempfile
 from pathlib import Path
 
+import agents
 import door
 import room
 import route
 
-ROUTE_PORT, DOOR_PORT = 18471, 18472
-TOOLS = "mcp__lego__offload,Bash,Read,Write,Edit,Glob,Grep"
 
-
-def session(policy, state, args, capture=None, agent=None, timeout=900):
-    """One agent session: start the door and the route, run the agent in the room, stop both."""
+def session(policy, state, agent, args, capture=None, timeout=None, tty=False):
+    """One agent session: start the door and the route on free ports, run the agent in the room, stop both."""
+    adapter, upstream = agents.AGENTS[agent]
     d = door.Door(policy, state)
-    servers = [door.serve(d, DOOR_PORT), route.serve(ROUTE_PORT, capture=capture)]
+    ds, rs = door.serve(d, 0), route.serve(0, upstream, capture=capture)
+    dp, rp = ds.server_address[1], rs.server_address[1]
     home = tempfile.mkdtemp(prefix="lego-home-")
     try:
-        mcp = Path(home, "mcp.json")
-        mcp.write_text(json.dumps({"mcpServers": {"lego": {"type": "http", "url": f"http://127.0.0.1:{DOOR_PORT}/mcp"}}}))
-        agent = agent or shutil.which("claude")
-        return room.launch(agent, [*args, "--mcp-config", str(mcp), "--strict-mcp-config", "--allowedTools", TOOLS],
-                           policy["workspace"], home, ROUTE_PORT, DOOR_PORT, timeout=timeout)
+        argv, install, env = adapter(home, f"http://127.0.0.1:{rp}", f"http://127.0.0.1:{dp}/mcp", list(args))
+        return room.launch(argv[0], argv[1:], policy["workspace"], home, rp, dp, env=env, timeout=timeout,
+                           agent_dir=install, tty=tty)
     finally:
-        for s in servers:
+        for s in (ds, rs):
             s.shutdown(), s.server_close()
         shutil.rmtree(home, ignore_errors=True)
 
 
-if __name__ == "__main__":
-    if len(sys.argv) < 3:
+def find_policy(argv):
+    if argv[:1] == ["--policy"]:
+        return Path(argv[1]), argv[2:]
+    for p in (os.environ.get("LEGO_POLICY"), "lego.json", "~/.lego/policy.json"):
+        if p and Path(p).expanduser().exists():
+            return Path(p).expanduser(), argv
+    sys.exit("lego: no policy found (pass --policy FILE, set LEGO_POLICY, or create ./lego.json)")
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help"):
         sys.exit(__doc__)
-    policy = json.loads(Path(sys.argv[1]).read_text())
-    state = Path(sys.argv[1]).resolve().parent / ".lego"
-    if sys.argv[2] == "--reset":
-        door.Door(policy, state).reset()
-        sys.exit(0)
-    r = session(policy, state, sys.argv[2:])
-    sys.stdout.write(r.stdout), sys.stderr.write(r.stderr)
-    sys.exit(r.returncode)
+    if argv[:2] == ["app", "--demo"]:
+        import app
+        return app.demo(int(argv[2]) if len(argv) > 2 else 8470)
+    path, argv = find_policy(argv)
+    policy = json.loads(path.read_text())
+    policy.setdefault("workspace", os.getcwd())
+    state = path.resolve().parent / ".lego"
+    cmd, args = argv[0], argv[1:]
+    if cmd == "reset":
+        return door.Door(policy, state).reset()
+    if cmd == "app":
+        import app
+        return app.main(policy, state, int(args[0]) if args else 8470)
+    if cmd not in agents.AGENTS:
+        sys.exit(f"lego: unknown agent {cmd!r}; choose one of {', '.join(agents.AGENTS)}")
+    tty = sys.stdin.isatty() and sys.stdout.isatty()
+    r = session(policy, state, cmd, args, tty=tty)
+    if not tty:
+        sys.stdout.write(r.stdout), sys.stderr.write(r.stderr)
+    return r.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]) or 0)
