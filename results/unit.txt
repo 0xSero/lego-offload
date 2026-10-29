@@ -1,0 +1,5 @@
+ok test_label
+ok test_move_and_run
+ok test_shape
+ok test_charge
+ok test_clock_and_release

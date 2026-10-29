@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 R=verify/runs
 mkdir -p "$R" results
-t() { perl -e "alarm $1; shift; exec @ARGV" "${@:2}"; }   # hard timeout on every step
+t() { perl -e "alarm $1; exec @ARGV or die qq(cannot run \$ARGV[0]\n)" "${@:2}"; }   # hard timeout on every step
 step() { printf '\n== %s\n' "$*"; }
 
 unit() { step unit; t 300 python3 tests/test_core.py | tee results/unit.txt; t 300 python3 tests/test_room.py | tee results/room.txt; }

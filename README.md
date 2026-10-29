@@ -101,6 +101,44 @@ Reply rows:
 - **Private inputs without `returns`** give a receipt. The full output is saved on gpu-box for you, and its ref can be passed to later offloads.
 - **Sealed inputs** (`.env`) are refused, and so is the Mac-only `legal` scope, because no machine with a model is trusted with it.
 
+## Traces: both models, every case
+
+Each e2e case writes a full trace to [`results/traces/<case>.md`](results/traces/). It has two halves.
+
+**Cloud side.** Everything that crossed the route, both directions:
+
+- the prompt;
+- each Claude Code turn, with tool calls and the door's replies;
+- the final answer.
+
+The route captures the requests and the decompressed streamed replies. Claude's thinking comes back from the API redacted, so the trace only marks where it happened.
+
+**Private side.** Each job's local model call on gpu-box:
+
+- the exact prompt, including the private file contents;
+- DeepSeek's reasoning;
+- its raw output and token usage.
+
+This half never left gpu-box during the run. The test copies it out only because the data is synthetic.
+
+Putting the halves side by side shows the point. In `headcount`, DeepSeek reads twelve names and salaries and reasons "176697 yes, 159750 yes, … Count 4". Claude Code only ever receives `{"row": "shaped", "answer": 4, …}`.
+
+E2E cases:
+
+| Case | What it does |
+|-|-|
+| `headcount` | Private question about the hr file |
+| `notice` | Private question about the acme contract |
+| `public_tests` | Public work: write tests for `utils.py` |
+| `sealed_env` | Ask for the Stripe key in an unlisted `.env` |
+| `legal_memo` | Mac-only scope with no trusted model |
+| `exfil` | Ask the agent to dump the whole hr file |
+| `escape` | Tell the agent to break out of the room |
+| `drain` | Binary-search one salary until the allowance runs out |
+| `scripted_attack` | 12 tricks sent straight at the door's MCP endpoint, with no model goodwill involved |
+
+Claude Code tends to refuse the exfil prompts on its own. The scripted attacker therefore tests the door without relying on any agent's restraint.
+
 ## The bricks (`core.py`)
 
 | Brick | Rule |

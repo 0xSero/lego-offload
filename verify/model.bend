@@ -227,14 +227,22 @@ def level(cfg, t, al, frontier, d, seen, next, evs):
       (seen1, next1, evs1) = succ(cfg, t, al, frontier.head, 0, d, seen, next, evs)
       return level(cfg, t, al, frontier.tail, d, seen1, next1, evs1)
 
-def bfs(cfg, t, al, frontier, seen, count, d, evs):
+def hit(evs):
+  (e0, e1, e2, e3) = evs
+  (d0, p0, a0) = e0
+  (d1, p1, a1) = e1
+  (d2, p2, a2) = e2
+  return (d0 != 99) | (d1 != 99) | (d2 != 99)
+
+# stop = 1: return after the first level that shows a violation (enough to say "caught")
+def bfs(cfg, t, al, frontier, seen, count, d, evs, stop):
   (len, frontier1) = List/length(frontier)
-  if len == 0:
+  if (len == 0) | (stop & hit(evs)):
     return (seen, count, d - 1, evs)
   else:
     (seen1, next, evs1) = level(cfg, t, al, frontier1, d + 1, seen, List/Nil, evs)
     (k, next1) = List/length(next)
-    return bfs(cfg, t, al, next1, seen1, count + k, d + 1, evs1)
+    return bfs(cfg, t, al, next1, seen1, count + k, d + 1, evs1, stop)
 
 def trace(seen, s, init, acc):
   if s == init:
@@ -255,15 +263,15 @@ def witness(seen, e, init):
 def init_state(al):
   return 3 + (3 << 8) + ((al & 3) << 16) + (((al >> 2) & 3) << 18)
 
-def explore(cfg, t, al):
+def explore(cfg, t, al, stop):
   s0 = init_state(al)
   nil3 = (99, 0, 0)
   seen = Map/set(Map/Leaf, s0, (s0, 999, 0))
-  return (s0, bfs(cfg, t, al, [s0], seen, 1, 0, (nil3, nil3, nil3, nil3)))
+  return (s0, bfs(cfg, t, al, [s0], seen, 1, 0, (nil3, nil3, nil3, nil3), stop))
 
 # states, diameter and the depth of each event's shortest witness (99 = never)
 def check(cfg, t, al):
-  (s0, r) = explore(cfg, t, al)
+  (s0, r) = explore(cfg, t, al, 0)
   (seen, n, diam, evs) = r
   (e0, e1, e2, e3) = evs
   (d0, p0, a0) = e0
@@ -274,7 +282,7 @@ def check(cfg, t, al):
 
 # the same, with the action trace of each witness
 def check_tr(cfg, t, al):
-  (s0, r) = explore(cfg, t, al)
+  (s0, r) = explore(cfg, t, al, 0)
   (seen, n, diam, evs) = r
   (e0, e1, e2, e3) = evs
   (w0, seen1) = witness(seen, e0, s0)
@@ -315,13 +323,9 @@ def mutants(vs, t):
 
 # each mutant over every topology: how many of the 512 topologies expose it
 def violated(cfg, t, al):
-  (s0, r) = explore(cfg, t, al)
+  (s0, r) = explore(cfg, t, al, 1)
   (seen, n, diam, evs) = r
-  (e0, e1, e2, e3) = evs
-  (d0, p0, a0) = e0
-  (d1, p1, a1) = e1
-  (d2, p2, a2) = e2
-  return (d0 != 99) | (d1 != 99) | (d2 != 99)
+  return hit(evs)
 
 def catch(cfg, t, n):
   if n == 0:

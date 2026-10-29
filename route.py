@@ -1,6 +1,6 @@
 """Route: the room's only way to its cloud model. A localhost reverse proxy that strips
 whatever key the agent sends, injects the real credential (which never enters the room),
-streams the reply back, and can capture every request body for an independent leak scan.
+streams the reply back, and can capture every exchange (request and streamed reply) for leak scans and traces.
 """
 import http.client
 import json
@@ -8,6 +8,7 @@ import os
 import subprocess
 import threading
 import time
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers",
@@ -62,9 +63,6 @@ def serve(port, upstream="anthropic", capture=None):
             if not self.path.startswith(prefixes):
                 self.send_response(404), self.send_header("content-length", "0"), self.end_headers()
                 return
-            if capture:
-                with lock, open(capture, "ab") as f:
-                    f.write(json.dumps({"t": time.time(), "path": self.path}).encode() + b"\n" + body + b"\n")
             hdrs = {k: v for k, v in self.headers.items() if k.lower() not in HOP | {"anthropic-beta"}}
             betas = [b.strip() for b in self.headers.get("anthropic-beta", "").split(",") if b.strip()]
             if beta and beta not in betas:
@@ -72,10 +70,11 @@ def serve(port, upstream="anthropic", capture=None):
             if betas:
                 hdrs["anthropic-beta"] = ",".join(betas)
             hdrs.update({"Authorization": "Bearer " + token(), "Host": host, "Content-Length": str(len(body))})
-            conn = http.client.HTTPSConnection(host, 443, timeout=600)
+            conn, got, status, enc = http.client.HTTPSConnection(host, 443, timeout=600), [], None, ""
             try:
                 conn.request(self.command, self.path, body=body, headers=hdrs)
                 r = conn.getresponse()
+                status, enc = r.status, r.getheader("content-encoding", "")
                 self.send_response(r.status, r.reason)
                 for k, v in r.getheaders():
                     if k.lower() not in HOP:
@@ -83,11 +82,20 @@ def serve(port, upstream="anthropic", capture=None):
                 self.send_header("transfer-encoding", "chunked")
                 self.end_headers()
                 while chunk := r.read1(65536):
+                    got.append(chunk)
                     self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                     self.wfile.flush()
                 self.wfile.write(b"0\r\n\r\n")
             finally:
                 conn.close()
+                if capture:                                # one JSON line per exchange: what left, what came back
+                    raw = b"".join(got)
+                    if enc == "gzip":
+                        raw = zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(raw)
+                    rec = {"t": time.time(), "path": self.path, "status": status,
+                           "request": body.decode(errors="replace"), "response": raw.decode(errors="replace")}
+                    with lock, open(capture, "a") as f:
+                        f.write(json.dumps(rec) + "\n")
 
         do_GET = do_POST = forward
 

@@ -118,7 +118,8 @@ def step(cfg, t, al, s, a):
     return pack(r0, r1, la, lb, ka, kb), ev
 
 
-def explore(cfg, t, al):
+def explore(cfg, t, al, stop=False):
+    """BFS to a fixpoint; with stop, return at the end of the first level that shows a violation."""
     s0 = pack(None, None, al & 3, al >> 2 & 3, 0, 0)
     seen = {s0: (None, None, 0)}
     best = [None] * 4                                     # (depth, parent, action)
@@ -137,6 +138,8 @@ def explore(cfg, t, al):
                 seen[n] = (s, a, d + 1)
                 nxt.append(n)
         frontier, d = nxt, d + 1 if nxt else d
+        if stop and any(b is not None for b in best[:3]):
+            break
     return s0, seen, d, best
 
 
@@ -149,8 +152,8 @@ def trace(seen, s, a):
 
 
 def check(args):
-    cfg, t, al = args
-    s0, seen, d, best = explore(cfg, t, al)
+    cfg, t, al, *stop = args
+    s0, seen, d, best = explore(cfg, t, al, bool(stop))
     return {"cfg": cfg, "t": t, "al": al, "states": len(seen), "diameter": d,
             "depths": [99 if b is None else b[0] for b in best],
             "traces": [None if b is None else trace(seen, b[1], b[2]) for b in best]}
@@ -166,7 +169,7 @@ def runs():
     mut = [(c, STD_T, STD_AL) for _, c in VARIANTS]
     alw = [(63, STD_T, al) for al in range(16) if al & 3 != 3 and al >> 2 != 3]
     topo = [(63, t, STD_AL) for t in range(512)]
-    catch = [(c, t, STD_AL) for _, c in VARIANTS[1:] for t in range(512)]
+    catch = [(c, t, STD_AL, "stop") for _, c in VARIANTS[1:] for t in range(512)]   # only: caught or not
     return mut, alw, topo, catch
 
 

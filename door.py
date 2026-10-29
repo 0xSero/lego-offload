@@ -86,7 +86,7 @@ class Door:
         if returns is not None:
             core.bits(returns)                                 # refuse bad shapes before anything else
         row, ledger = self._charge_plan(out, returns)
-        self._note(op="offload", node=n, inputs=[i.ref for i in items], scopes=sorted(out.scopes),
+        self._note(op="offload", node=n, ref=out_ref, inputs=[i.ref for i in items], scopes=sorted(out.scopes),
                    row=row, bits=core.bits(returns) if row == "shaped" else 0)
         moved = [core.move(i, self.nodes[n]) for i in items]
         self.refs[out_ref] = out.scopes

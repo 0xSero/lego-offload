@@ -66,6 +66,8 @@ The model runs:
 
 `check.py` replays every Bend counterexample through `core.py`, step by step, to confirm that each one is a real attack.
 
+The 3,072 mutant runs only need one fact: whether the mutant is caught. Both encodings therefore stop each of those runs at the first BFS level that shows a violation. When a mutant is not caught, the run still explores every state.
+
 ## 3. Leak counting (`qif.bend`)
 
 Layer 2 tracks *which* secrets a value depends on. This layer counts *how much* the cloud learns. It uses self-composition: the system runs on 16 secret worlds at once (hr ∈ 0..3, acme ∈ 0..1, `.env` ∈ 0..1), and for every attack sequence it compares what the cloud observes across worlds. With `ca` and `cb` the bits charged so far, it checks the Köpf–Basin bounds:

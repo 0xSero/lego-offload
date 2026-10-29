@@ -21,8 +21,10 @@ if job["schema"]:
 t0 = time.time()
 req = urllib.request.Request(job["model"]["base_url"].rstrip("/") + "/chat/completions",
                              data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
-out = json.loads(urllib.request.urlopen(req, timeout=job["timeout"]).read())["choices"][0]["message"]["content"] or ""
+resp = json.loads(urllib.request.urlopen(req, timeout=job["timeout"]).read())
+out = resp["choices"][0]["message"]["content"] or ""
 open(job["out"], "w").write(out)
+json.dump({"request": body, "response": resp}, open(job["out"] + ".trace.json", "w"))  # stays on the node
 print(json.dumps({"took": time.time() - t0, "output": None if job["keep"] else out}))
 '''
 
