@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# One command for everything: ./run            (or ./run unit|verify|sim|e2e)
+# unit    brick tests, and the sandbox room probed with plain binaries (no model)
+# verify  Bend: brick laws, every-topology model check, 16-world leak counting; each
+#         cross-checked against a Python twin that drives the real core.py
+# sim     Bend Monte Carlo of a working day (budget x reply time), checked bit-exact
+# e2e     real models: private data on gpu-box, Claude Code in the sandbox room
+set -euo pipefail
+cd "$(dirname "$0")"
+R=verify/runs
+mkdir -p "$R" results
+t() { perl -e "alarm $1; shift; exec @ARGV" "${@:2}"; }   # hard timeout on every step
+step() { printf '\n== %s\n' "$*"; }
+
+unit() { step unit; t 300 python3 tests/test_core.py | tee results/unit.txt; t 300 python3 tests/test_room.py | tee results/room.txt; }
+
+verify() {
+  step "verify: brick laws"
+  t 600 bend run-c verify/lemmas.bend -s > $R/lemmas_raw.txt
+  (cd verify && t 600 python3 lemmas_ref.py runs/lemmas_raw.txt) | tee results/lemmas.txt
+  step "verify: model check, 7 mutants + 9 allowances + 512 topologies + 3072 mutant runs"
+  t 7200 bend run-c verify/model.bend -s > $R/bend_raw.txt
+  (cd verify && t 7200 python3 model_ref.py runs/ref.json && t 600 python3 check.py runs/bend_raw.txt runs/ref.json ../results/model_check.json) | tee results/model_check.txt
+  step "verify: leak counting over 16 secret worlds, every 3-step attack"
+  t 3600 bend run-c verify/qif.bend -s > $R/qif_raw.txt
+  (cd verify && t 3600 python3 qif_ref.py 3 runs/qif_ref.json && t 60 python3 qif_check.py runs/qif_raw.txt runs/qif_ref.json ../results/qif.json) | tee results/qif.txt
+}
+
+sim() {
+  step "sim: 8192 sessions x 15 cells"
+  t 900 bend run-c verify/sim.bend -s > $R/sim_raw.txt
+  (cd verify && t 900 python3 sim_ref.py runs/sim_raw.txt ../results/sim.json) | tee results/sim.txt
+}
+
+e2e() { step "e2e: real models"; t 7200 python3 tests/e2e.py results/e2e.json | tee results/e2e.txt; }
+
+case "${1:-all}" in
+  unit) unit ;; verify) verify ;; sim) sim ;; e2e) e2e ;;
+  all) unit; verify; sim; e2e; t 60 python3 tests/report.py > results/REPORT.md; cat results/REPORT.md ;;
+  *) echo "usage: ./run [all|unit|verify|sim|e2e]"; exit 2 ;;
+esac

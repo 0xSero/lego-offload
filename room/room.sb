@@ -1,0 +1,110 @@
+;; room.sb -- deny-by-default Room for a headless coding agent (Claude Code).
+;;
+;; Parameters (all required, pass with sandbox-exec -D NAME=value):
+;;   WS          workspace dir (read/write), realpath, e.g. /private/tmp/room/ws
+;;   HOME_DIR    throwaway HOME (read/write), realpath
+;;   AGENT_BIN   realpath of the agent binary (claude: ~/.local/share/claude/versions/X)
+;;   ROUTE_PORT  localhost port of the Route (API proxy)
+;;   DOOR_PORT   localhost port of the Door (MCP HTTP server)
+;;
+;; Paths must be realpaths (/private/tmp, not /tmp): the sandbox matches the
+;; resolved vnode path.
+
+(version 1)
+(deny default)
+
+;; ---------------------------------------------------------------- process
+(allow process-fork)
+(allow process-exec
+       (literal (param "AGENT_BIN"))
+       (subpath "/bin")
+       (subpath "/usr/bin")
+       (literal "/usr/libexec/path_helper"))
+;; BEGIN deputy-exec-deny  (defence in depth: these are also blocked by the
+;; mach-lookup / network / file layers below; probes.sh --no-exec-deny strips
+;; this block to prove that)
+(deny process-exec
+      (literal "/usr/bin/osascript")
+      (literal "/usr/bin/open")
+      (literal "/bin/launchctl")
+      (literal "/usr/bin/launchctl")
+      (literal "/usr/bin/mdfind")
+      (literal "/usr/bin/mdls")
+      (literal "/usr/bin/mdutil")
+      (literal "/usr/bin/security")
+      (literal "/usr/bin/ssh")
+      (literal "/usr/bin/scp")
+      (literal "/usr/bin/sftp")
+      (literal "/usr/bin/pbcopy")
+      (literal "/usr/bin/pbpaste")
+      (literal "/usr/bin/shortcuts")
+      (literal "/usr/bin/automator")
+      (literal "/usr/bin/tccutil")
+      (literal "/usr/bin/sudo")
+      (literal "/usr/bin/login")
+      (literal "/usr/bin/su"))
+;; END deputy-exec-deny
+(allow signal (target same-sandbox))
+(allow process-info* (target same-sandbox))
+(allow sysctl-read)
+
+;; ---------------------------------------------------------------- files: read-only system
+(allow file-read* file-map-executable
+       (subpath "/System/Library")
+       (subpath "/System/Cryptexes")
+       (subpath "/System/Volumes/Preboot/Cryptexes")
+       (subpath "/usr/lib")
+       (subpath "/usr/libexec")
+       (subpath "/usr/share")
+       (subpath "/bin")
+       (subpath "/usr/bin")
+       (subpath "/private/var/db/timezone")
+       (subpath "/private/var/select")
+       (literal (param "AGENT_BIN")))
+
+(allow file-read*
+       (literal "/")
+       (subpath "/private/etc")
+       (literal "/dev/null")
+       (literal "/dev/zero")
+       (literal "/dev/random")
+       (literal "/dev/urandom")
+       (literal "/dev/dtracehelper")
+       (literal "/dev/tty")
+       (regex #"^/dev/ttys[0-9]+$")
+       (subpath "/dev/fd"))
+
+;; stat() of the path components leading to allowed roots (realpath walks),
+;; plus the standard root symlinks. Metadata only: no listing, no content.
+(allow file-read-metadata
+       (literal "/etc") (literal "/tmp") (literal "/var")
+       (path-ancestors (param "WS"))
+       (path-ancestors (param "HOME_DIR"))
+       (path-ancestors (param "AGENT_BIN")))
+
+;; ---------------------------------------------------------------- files: read/write
+(allow file-read* file-write*
+       (subpath (param "WS"))
+       (subpath (param "HOME_DIR")))
+
+(allow file-write-data file-ioctl
+       (literal "/dev/null")
+       (literal "/dev/zero")
+       (literal "/dev/tty")
+       (literal "/dev/dtracehelper")
+       (regex #"^/dev/ttys[0-9]+$")
+       (subpath "/dev/fd"))
+
+;; ---------------------------------------------------------------- network
+;; Only the Route and the Door, on loopback. No DNS, no LAN, no internet.
+(allow network-outbound
+       (remote tcp (string-append "localhost:" (param "ROUTE_PORT")))
+       (remote tcp (string-append "localhost:" (param "DOOR_PORT"))))
+
+;; ---------------------------------------------------------------- IPC
+(allow ipc-posix-shm-read*
+       (ipc-posix-name "apple.shm.notification_center"))
+(allow mach-lookup
+       (global-name "com.apple.system.notification_center")
+       (global-name "com.apple.system.logger")
+       (global-name "com.apple.logd"))
