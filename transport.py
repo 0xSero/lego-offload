@@ -20,7 +20,9 @@ walk = lambda p: [] if os.path.islink(p) else sorted(f for r, _, fs in os.walk(p
                                                      if not os.path.islink(f)) if os.path.isdir(p) else [p]   # links: skipped
 docs = "".join("\n--- %s ---\n%s" % (f, open(f, errors="replace").read()) for p in job["files"] for f in walk(p))
 body = {"model": job["model"]["model"], "messages": [
-    {"role": "system", "content": "You work for the owner of these files. Answer the task from the files only."},
+    {"role": "system", "content": "You work for the owner of these files. Answer the task from the files given, or "
+     "from what you know if none are. Placeholders like [PERSON_3f9a] stand for real values: use them as the values, "
+     "copied exactly."},
     {"role": "user", "content": job["task"] + "\n" + docs}]}
 if "temperature" in job:
     body["temperature"] = job["temperature"]
@@ -153,7 +155,8 @@ def run_anthropic(node, files, task, schema, out_path, keep, timeout):
         f for r, _, fs in os.walk(p) for f in [os.path.join(r, x) for x in fs] if not os.path.islink(f)) if os.path.isdir(p) else [p]
     docs = "".join(f"\n--- {f.rsplit('/', 1)[-1].split('-', 1)[-1]} ---\n" + open(f, errors="replace").read()
                    for p in files for f in walk(p))
-    sys = "Answer the task from the files only."
+    sys = ("Answer the task from the files given, or from what you know if none are. Placeholders like [PERSON_3f9a] "
+           "stand for real values: use them as the values, copied exactly.")
     if schema:
         sys += " Reply with only a JSON object matching: " + json.dumps(schema_json(schema))
     sys = [{"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."},  # the login's
