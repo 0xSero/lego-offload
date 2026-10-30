@@ -17,11 +17,11 @@ import fcntl
 import hmac
 import json
 import os
+import re
 import secrets
 import stat
 import threading
 import time
-import unicodedata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -144,6 +144,9 @@ class Door:
         self.public = {f"{self.host}:{p}" for p in policy.get("public", [])}
         self.scopes = policy["scopes"]
         core.check_policy(self.public, self.scopes)
+        for s in set(self.scopes.values()):                    # hr~ is hr scrubbed, sealed is no scope
+            if not re.fullmatch(r"[A-Za-z0-9_-]+", s) or s == core.SEALED:
+                raise core.Refused(f"scope name {s!r}: use letters, digits, - and _ only, and not {core.SEALED!r}")
         for d in self.scopes:                                  # a listing of the outer one would show the inner
             if d.endswith("~") or "," in d:                    # taint ids: dirs joined by "," and "~" for scrubbed
                 raise core.Refused(f"private directory {d} may not end in ~ or hold a comma")
@@ -270,6 +273,12 @@ class Door:
         asked, ref = ref, self.alias.get(ref, self.alias[ends[0]] if len(ends) == 1 else ref)   # a name shown
                                                                # scrubbed (or its tail) means its real file
         internal = internal or asked in self.alias
+        try:
+            if "\0" in ref:
+                raise ValueError
+            os.fsencode(ref)
+        except (ValueError, UnicodeError):
+            raise core.Refused("name files by plain paths") from None
         mine = [r for r in self.refs if r.partition(":")[2] == ref]
         ref = mine[0] if len(mine) == 1 else ref               # a result ref given without its node
         ref = f"{self.host}:{ref}" if ref.startswith("/") else ref
@@ -280,10 +289,8 @@ class Door:
             raise core.Refused(f"unknown node in {asked}")
         path = os.path.normpath(path)                          # ws/../keys is keys
         path = self.upto(path) if node == self.host else path  # /var is /private/var; nothing inside a scope followed
-        fold = lambda p: unicodedata.normalize("NFC", p).casefold()  # noqa: E731   KEYS is keys
-        fk = lambda d: f"{d.partition(':')[0]}:{fold(d.partition(':')[2])}"  # noqa: E731   the node as written
-        named = core.label(f"{node}:{fold(path)}", set(map(fk, self.public)), (fs := {fk(d): s for d, s in self.scopes.items()}))
-        ours = node == self.host and inside(fold(path), fold(self.ws))
+        named = core.label(f"{node}:{path}", self.public, self.scopes)   # as spelled: HR beside hr is not hr on a
+        ours = node == self.host and inside(path, self.ws)     # case-sensitive disk (KEYS is keys here: upto spelled it)
         if core.SEALED in named and not ours and f"{node}:{path}" not in self.refs:
             raise self.sealed(asked)                           # from its spelling alone: the disk is never looked at
         named = named if core.SEALED not in named and not ours else None
@@ -291,7 +298,7 @@ class Door:
             if not core.may_hold(self.me, core.scrubbed(named)):  # a scope it sees nothing of: decided from the name,
                 self.deferred.add(f"{node}:{path}")            # the files are found only inside the job
                 return core.Item(f"{node}:{path}", named, node)
-            if f"{node}:{fold(path)}" not in fs:
+            if f"{node}:{path}" not in self.scopes:
                 raise core.Refused(f"name files in {sorted(named)} by the names listed (read \".\" lists them)")
         if node == self.host:                                  # upto() followed every link it met by readlink; from
             try:                                               # here on, none is: one open, no link on the way
@@ -725,7 +732,7 @@ class Door:
                 else:
                     out = self.offload(str(a.get("task", "")), a.get("inputs") or [], a.get("returns"), a.get("node"))
             except Exception as e:                             # fail closed: a call that breaks gets nothing
-                why = str(e) if isinstance(e, core.Refused) else f"call failed ({type(e).__name__})"
+                why = str(e) if isinstance(e, core.Refused) else "call failed"
                 self._note(op="refused", reason=why)
                 out = {"refused": why}
             note = out.pop("note", None)                       # a read that cut a model off says so

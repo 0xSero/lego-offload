@@ -1024,6 +1024,41 @@ def test_twentyfifth_hunt_stays_fixed():
             j.join()
 
 
+def test_twentysixth_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "box/notes").mkdir(parents=True)
+        (t / "box/notes/a.txt").write_text("SEALED-CANARY\n")
+        (t / "divorce/lawyer.txt").parent.mkdir()
+        (t / "divorce/lawyer.txt").write_text("x\n")
+        node = lambda trust, n, **m: {"trust": trust, "out": str(t / n / "out"), "stage": str(t / n / "stage"), **m}  # noqa: E731
+        q = {**p, "scopes": {f"box:{t}/box/notes": "notes", **p["scopes"]},
+             "nodes": {**p["nodes"], "box": node(["notes", "notes~"], "box", ssh="box"),
+                       "here": {**p["nodes"]["here"], "trust": p["nodes"]["here"]["trust"] + ["notes", "notes~"]},
+                       "mid": node(["notes", "keys", "keys~"], "mid", model={"url": "http://x/v1", "model": "m",
+                                                                           "base_url": "http://x/v1"})}}
+        mid = door.Door({**q, "workspace": str(t / "ws3")}, t / "state3", "mid")
+        (t / "ws3").mkdir()
+        sh, ran = transport._sh, []
+        transport._sh = lambda *a, **k: ran.append(a) or b""
+        try:                                                                    # Notes beside notes, on a Linux node:
+            assert "is sealed" in refusal(mid, "read", path=f"box:{t}/box/Notes/a.txt")
+            assert not any("Notes" in a[1] for a in ran), ran                   # never looked at
+        finally:
+            transport._sh = sh
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2").mkdir()
+        probe = lambda q: refusal(cloud, "read", path=q).replace(q, "<q>")  # noqa: E731
+        assert len({probe(f"{t}/{d}/{c}") for d in ("divorce", "divorce/lawyer.txt", "nope") for c in ("\0", "\ud800", "x")}) == 2
+        assert "name files by plain paths" in probe(f"{t}/divorce/\0")      # refused before the disk is looked at
+        for bad in ("hr~", "sealed", "a,b"):
+            try:
+                door.Door({**p, "scopes": {f"here:{t}/hr": bad, f"here:{t}/keys": "keys"}}, t / "s6", "cloud")
+                raise AssertionError(f"scope name {bad!r} accepted")
+            except core.Refused:
+                pass
+
+
 def test_own_precision():
     """Caller text: everyday and technical words stay as written; names, in any of the forms the hunts used, do not."""
     import scrub
