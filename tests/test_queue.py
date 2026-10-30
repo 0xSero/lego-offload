@@ -30,7 +30,8 @@ def fake_job(node, files, task, returns, out, keep, timeout, salt):
 
 transport.run_job = fake_job
 transport.put = lambda node, stage, name, data, timeout=60: f"{stage}/{name}"
-door.Door.bytes_of = lambda self, item, scrubbed, timeout=60: b""
+door.Door.bytes_of = lambda self, item, scrubbed, timeout=60, node=None: b""
+door.Door.expand = lambda self, item: [item]                    # no real files behind the hidden inputs
 
 
 def trial(private_len):

@@ -64,7 +64,7 @@ COMMON = set("will mark may june april august grace hope faith joy rose pat bill
              "long young little black white brown green king bell hill wood page lane gray grey rich chase hunter "
              "major price love case cash ward stone field park banks miles holly ivy jack sky".split())
 TOKEN = re.compile(r"\[([A-Z]+)_([0-9a-f]+)\]")
-SEP = r"[ ().\-/_]{0,2}"                                         # between the digits of a written number
+SEP = r"\s{0,2}[().\-/_]{0,2}\s{0,2}"                                         # between the digits of a written number
 CF = dict.fromkeys(c for c in range(0x10000) if unicodedata.category(chr(c)) == "Cf")
 MARKS = {**dict.fromkeys(map(ord, "\u2018\u2019\u02bc\uff07\u0060\u00b4"), "'"),        # O’Brien is O'Brien
          **dict.fromkeys(range(0x2010, 0x2016), "-")}
@@ -199,7 +199,8 @@ class Vault:
             self._re = {}
         if key not in self._re:
             mine = lambda t: set(self.v["scope"].get(t, [])) & key  # noqa: E731
-            alt = lambda keys: "|".join(re.escape(k).replace(r"\ ", r"[\s_.\-]*")   # frank brown: frank_brown, FrankBrown
+            alt = lambda keys: "|".join(re.sub(r"(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])", r"[\\s_.\\-]*",   # E 10234
+                                               re.escape(k).replace(r"\ ", r"[\s_.\-]*"))   # frank_brown, FrankBrown
                                         for k in sorted(keys, key=len, reverse=True))  # noqa: E731
             ids = {k: t for k, t in self.v["ids"].items() if mine(t)}
             joined = {re.sub(r"[\s_.\-]+", "", k): t for k, t in ids.items()}   # how a match is looked up
@@ -221,34 +222,58 @@ class Vault:
                                                  + r")(?!\d)") if digits else None), short)
         return self._re[key]
 
-    def scrub(self, text, scopes):
-        """The text with every known identifier of `scopes` replaced, and only those: what is replaced
-        must not tell the reader which of its own guesses the vault holds. Identifiers the files did not
-        hold are found by pattern and learned on the spot, tagged with the scopes of the text."""
+    def scrub(self, text, scopes, fresh=None):
+        """The text with every known identifier of `scopes` replaced, and only those. Identifiers the
+        files did not hold are found by pattern and learned on the spot, tagged with the scopes of the text.
+
+        `fresh` is for text the caller wrote, which a lower model may have asked it to relay: then every
+        identifier-looking span, known or not (patterns, "Two Capitalised" words), gets a placeholder of
+        its own, kept in `fresh` and never the vault's, so the reader learns neither which of its guesses
+        the vault holds nor which row they are. Nothing is learned from such text."""
         text, scopes = norm(text), set(scopes)
         if not scopes:
             return text
-        self.find_in(text, scopes)
+        if fresh is None:
+            self.find_in(text, scopes)
         if self.dirty:
             self.save()
         ids, forms, res, folded, inner, (digits, numbers), short = self._pattern(scopes)
+
+        def tok(token, raw):
+            if fresh is None:
+                return token
+            kind = token[1:].split("_")[0]
+            key = f"{kind}|{fold(flat(raw))}"
+            if key not in fresh:
+                fresh[key] = f"[{kind}_{secrets.token_hex(4)}]"
+                fresh[fresh[key]] = raw
+            return fresh[key]
         if numbers:                                            # numbers however they are written
-            text = numbers.sub(lambda m: digits[re.sub(r"\D", "", m.group(0))], text)
+            text = numbers.sub(lambda m: tok(digits[re.sub(r"\D", "", m.group(0))], m.group(0)), text)
         for look, r in zip((ids, forms), res):
             if r:
-                text = r.sub(lambda m: (look[re.sub(r"[\s_.\-]+", "", m.group(1).lower())] if look is ids else look[m.group(1)])
-                             + m.group(2), text)
+                text = r.sub(lambda m: tok(look[re.sub(r"[\s_.\-]+", "", m.group(1).lower())] if look is ids
+                                           else look[m.group(1)], m.group(1)) + m.group(2), text)
+        if fresh is not None:                                  # known or not, they look the same
+            for kind, (p, check) in PATTERNS.items():
+                text = re.sub(p, lambda m: m.group(0) if TOKEN.fullmatch(m.group(0)) or check and not check(
+                    m.group(1) if m.lastindex else m.group(0)) else tok(f"[{kind}_]", m.group(0)), text)
+            text = re.sub(r"(?<![\w\[])[A-Z][a-z'-]+(?:[ \t]+[A-Z][a-z'-]+)+(?![\w\]])", lambda m: tok("[PERSON_]", m.group(0)), text)
         if not inner and not short:
             return text
 
         def hump(w):                                           # MeiNg: short names as whole humps
-            return short.get(fold(w)) or (inner.sub(lambda h: folded[h.group(0)], fold(w)) if inner and inner.search(fold(w)) else w)
+            if short.get(fold(w)):
+                return tok(short[fold(w)], w)
+            return inner.sub(lambda h: tok(folded[h.group(0)], h.group(0)), fold(w)) if inner and inner.search(fold(w)) else w
 
         def run(m):                                            # zorbinaQuellwater2, quillonbrimstoke, Jose for José
             return "".join(hump(w) for w in re.split(r"(?<=[a-z])(?=[A-Z])", m.group(0)))
         return re.sub(r"\[[A-Z]+_[0-9a-f]+\]|[^\W\d_]+", lambda m: m.group(0) if m.group(0)[0] == "[" else run(m), text)
 
-    def scrub_name(self, name, scopes):
+    def scrub_name(self, name, scopes, fresh=None):
+        if fresh is not None:                                  # a name the caller wrote: like its text
+            return self.scrub(name, scopes, fresh)
         """A file name: whole first (emails, numbers), then piece by piece, `alice_nguyen-review.md` ->
         `[PERSON_1]_[PERSON_1]-review.md`."""
         name = self.scrub(name, scopes)
@@ -259,7 +284,13 @@ class Vault:
         return re.sub(r"(?<!\[)[A-Za-z0-9]+(?![\w]*\])", lambda m: ids.get(m.group(0).lower())
                       or lower.get(m.group(0).lower()) or m.group(0), name)
 
-    def unscrub(self, text, allowed):
-        """Placeholders back to real values, only those whose every scope is in `allowed`."""
-        return TOKEN.sub(lambda m: self.v["real"][m.group(0)] if m.group(0) in self.v["real"]
-                         and set(self.v["scope"].get(m.group(0), ["?"])) <= set(allowed) else m.group(0), text)
+    def unscrub(self, text, allowed, fresh=None):
+        """Placeholders back to real values, only those whose every scope is in `allowed` (and the
+        caller's own, from `fresh`). Only a placeholder standing alone: 1[PHONE_x] stays as written,
+        so a later scrub cannot miss what it would have become."""
+        def back(m):
+            t = m.group(0)
+            if fresh and t in fresh:
+                return fresh[t]
+            return self.v["real"][t] if t in self.v["real"] and set(self.v["scope"].get(t, ["?"])) <= set(allowed) else t
+        return re.sub(r"(?<![A-Za-z0-9])" + TOKEN.pattern + r"(?![A-Za-z0-9])", back, text)

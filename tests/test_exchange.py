@@ -3,8 +3,10 @@ its level allows, scrubbed text holds no identifier, a model that sees everythin
 back, and links or workspace copies do not launder a label."""
 import json
 import os
+import re
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -222,7 +224,7 @@ def test_fifth_hunt_stays_fixed():
     import time
     with tempfile.TemporaryDirectory() as tmp:
         t, p = setup(os.path.realpath(tmp))
-        (t / "keys/ops.txt").write_text("ops@corp.example 415-555-0134 41 Larkspur Mews\n")
+        (t / "hr/ops.txt").write_text("ops@corp.example 415-555-0134 41 Larkspur Mews\n")
         rev = door.Door(p, t / "state", "pop")                               # nothing read yet
         rev.prepare(lambda scope: lambda text: [])
         (t / "ws/zorbina_quellwater_letter.md").write_text("Dear Zorbina Quellwater, call 4155550134 at Larkspur Mews")
@@ -305,6 +307,50 @@ def test_seventh_hunt_stays_fixed():
         assert "0134" not in cloud.about()
 
 
+def test_eighth_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "keys/prod.env").write_text("DB_PASSWORD=Summer2024!\n")
+        (t / "keys/owners.csv").write_text("owner\nPellamy Strand\n")
+        (t / "hr/notes.md").write_text("Pellamy Strand called from 415 - 555 - 0134 about E 10234.\n")
+        (t / "hr/ids.csv").write_text("name,phone,employee id\nVarnella Oxtrude,415-555-0134,E-10234\n")
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        GOT.clear()
+        pop.offload("Summarise", [str(t / "hr/people.csv")], node="cloud")
+        view = GOT[-1][1]
+        pop.offload("Check: Zorbina Quellwater, Alice Smith, zq@corp.example, x@corp.example. Summer2024! Winter2023!",
+                    [], node="cloud")                                      # guesses the cloud asked pop to relay
+        sent = GOT[-1][1]
+        assert not leaked(sent) and "Alice Smith" not in sent, sent         # known and unknown look alike,
+        assert not set(re.findall(r"\[[A-Z]+_\w+\]", sent)) & set(re.findall(r"\[[A-Z]+_\w+\]", view))   # unlinked
+        assert "Summer2024!" in sent and "Winter2023!" in sent             # keys: the cloud sees nothing, so no
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")   # replacing to confirm a guess
+        (t / "ws2").mkdir()
+        text = cloud.read(str(t / "hr/notes.md"))["text"]
+        assert not leaked(text) and "0134" not in text and "10234" not in text, text   # keys names too, spaced forms
+        calls = []
+        real = transport.files
+        main = threading.current_thread()                                      # the job's own thread may look
+        transport.files = lambda *a, **k: (threading.current_thread() is main and calls.append(a)) or real(*a, **k)
+        try:
+            r = cloud.offload("x", [str(t / "keys/clients/globex")])        # hidden: no file system before the reply
+            assert r["row"] == "receipt" and not calls, (r, calls)
+        finally:
+            transport.files = real
+        os.symlink("/etc/hosts", t / "keys/out.lnk")                         # named in keys, linked out of it
+        assert refusal(cloud, "read", path=str(t / "keys/out.lnk")) == refusal(cloud, "read", path=str(t / "keys/nope"))
+        (t / "ws2/g").mkdir()
+        os.symlink(t / "hr/people.csv", t / "ws2/g/a")                       # a listed file swapped for a link
+        transport.files = lambda *a, **k: [str(t / "ws2/g/a")]
+        try:
+            assert not [i for i in cloud.items(["g"]) if "hr" in i.scopes]
+        finally:
+            transport.files = real
+        for j in cloud.jobs:
+            j.join()
+
+
 def tmp_out():
     return tempfile.mkdtemp() + "/out.txt"
 
@@ -312,6 +358,7 @@ def tmp_out():
 if __name__ == "__main__":
     for f in (test_levels, test_forward_cloud_in_front, test_reverse_local_in_front, test_found_leaks_stay_fixed,
               test_second_hunt_stays_fixed, test_third_hunt_stays_fixed, test_fourth_hunt_stays_fixed,
-              test_fifth_hunt_stays_fixed, test_sixth_hunt_stays_fixed, test_seventh_hunt_stays_fixed):
+              test_fifth_hunt_stays_fixed, test_sixth_hunt_stays_fixed, test_seventh_hunt_stays_fixed,
+              test_eighth_hunt_stays_fixed):
         f()
         print("ok  ", f.__name__)

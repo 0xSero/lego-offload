@@ -21,6 +21,7 @@ import re
 import secrets
 import threading
 import time
+import unicodedata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -135,6 +136,8 @@ class Door:
             self.reset()
         self.refs, self.alias, self.inodes = {}, {}, {}         # result ref -> scopes; shown name -> ref; ref -> inode
         self.learned = set()                                    # files the catalog found in the vault
+        self.deferred = set()                                   # hidden inputs, expanded only inside their job
+        self.fresh = {}                                         # the caller's own words -> placeholders, and back
         names = list(policy["nodes"])                           # the queue on each node (core.queue)
         self.slots = {n: (0.0, frozenset()) for n in names}
         self.locks = {n: threading.Lock() for n in names}
@@ -216,6 +219,14 @@ class Door:
             node, path = self.host, f"{self.ws}/{ref}"
         if node not in self.nodes:
             raise core.Refused(f"unknown node in {asked}")
+        named = core.label(f"{node}:{unicodedata.normalize('NFC', os.path.normpath(path))}", self.public, self.scopes)
+        named = named if core.SEALED not in named and not (node == self.host and inside(path, self.ws)) else None
+        if named and not internal and ref not in self.refs and not core.may_hold(self.me, named):
+            if not core.may_hold(self.me, core.scrubbed(named)):  # a scope it sees nothing of: decided from the name,
+                self.deferred.add(f"{node}:{os.path.normpath(path)}")   # the files are found only inside the job
+                return core.Item(f"{node}:{os.path.normpath(path)}", named, node)
+            if f"{node}:{os.path.normpath(path)}" not in self.scopes:
+                raise core.Refused(f"name files in {sorted(named)} by the names listed (read \".\" lists them)")
         if node == self.host:                                  # the agent can plant links in its workspace:
             path = canon(path)                                 # label where the bytes really are, and pin them
             if os.path.exists(path):
@@ -227,6 +238,8 @@ class Door:
         scopes = self.refs[ref] if ref in self.refs else core.label(ref, self.public, self.scopes)
         if node == self.host and inside(path, self.ws):
             scopes = frozenset(self.context)                   # the agent's own files hold what it was given
+        elif named and core.SEALED in scopes:
+            scopes = named                                     # named inside a scope, linked out of it: still the scope
         roots = [d for d, s in self.scopes.items() if s in scopes and d.startswith(node + ":")]
         if not internal and ref not in self.refs and roots and not any(d == ref for d in roots) and \
                 not core.may_hold(self.me, scopes) and core.may_hold(self.me, core.scrubbed(scopes)):
@@ -242,10 +255,10 @@ class Door:
         s = core.scrubbed(item.scopes)
         return ((core.Item(item.ref, s, item.node), True) if core.may_hold(node, s) else None)
 
-    def bytes_of(self, item, scrubbed, timeout=60):
+    def bytes_of(self, item, scrubbed, timeout=60, node=None):
         """An item's bytes, scrubbed if asked. A host file is opened without following links and must
         be the very file that was labelled."""
-        node, _, path = item.ref.partition(":")
+        to, (node, _, path) = node or self.me, item.ref.partition(":")
         if node == self.host:
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
             try:
@@ -257,17 +270,19 @@ class Door:
                 os.close(fd)
         else:
             data = transport.read(self.p["nodes"][node], path, timeout)
-        tags = self.tags(item)
-        if scrubbed and not item.ref.startswith(f"{self.host}:{self.ws}/") and not self.vault.known(item.ref, data):
+        if scrubbed and not self.mine(item) and not self.vault.known(item.ref, data):
             raise core.Refused("a private file changed or appeared after lego started: restart lego to learn it")
-        return self.vault.scrub(data.decode(errors="replace"), tags).encode() if scrubbed else data
+        return self.vault.scrub(data.decode(errors="replace"), self.tags(item, to),
+                                self.fresh if self.mine(item) else None).encode() if scrubbed else data
 
-    def tags(self, item):
-        """Whose identifiers to replace in an item. In what the caller wrote, only those of scopes it sees
-        as written: replacing others would tell it which of its guesses the vault holds."""
-        if self.mine(item):                                    # it may hold anything the caller sees raw
-            return self.raw & set(self.scopes.values())
-        return {s.rstrip("~") for s in item.scopes}
+    def tags(self, item, node=None):
+        """Whose identifiers to replace in an item going to `node`. A private file: every scope the node
+        does not see raw. What the caller wrote: only scopes it sees raw and the node sees scrubbed (one
+        the node sees nothing of is kept out by the context; replacing it would only confirm guesses)."""
+        t = (node or self.me).trust
+        if self.mine(item):
+            return {s for s in self.raw & set(self.scopes.values()) if s + "~" in t and s not in t}
+        return set(self.scopes.values()) - t
 
     def mine(self, item):
         return item.ref == "task" or item.node == self.host and inside(item.ref.partition(":")[2], self.ws)
@@ -371,10 +386,31 @@ class Door:
         for r in refs:
             it = self.item(r)
             node, _, path = it.ref.partition(":")
+            if it.ref in self.deferred:
+                out.append(it)
+                continue
             if node == self.host and inside(path, self.ws) and not os.path.exists(path):   # its own files only
                 raise core.Refused(f"no file {r} in your workspace. read \".\" lists what you can name.")
             found = [] if it.ref in self.refs or core.SEALED in it.scopes else transport.files(self.p["nodes"][node], path)
-            out += [self.item(f"{node}:{f}", internal=True) for f in found if inside(f, path)] if found and found != [path] else [it]
+            got = [self.item(f"{node}:{f}", internal=True) for f in found if inside(f, path)] if found and found != [path] else [it]
+            out += [i for i in got if inside(i.ref.partition(":")[2], path)]   # swapped for a link meanwhile: dropped
+        return out
+
+    def expand(self, it):
+        """A hidden input, inside its job: its files, each still inside its scope and pinned."""
+        node, _, path = it.ref.partition(":")
+        roots = [d.partition(":")[2] for d, s in self.scopes.items() if d.startswith(node + ":") and s in it.scopes]
+        out = []
+        for f in transport.files(self.p["nodes"][node], path, limit=None) or [path]:
+            f = canon(f) if node == self.host else f
+            if not any(inside(f, r) for r in roots):
+                continue
+            if node == self.host:
+                st = os.stat(f)
+                self.inodes[f"{node}:{f}"] = (st.st_dev, st.st_ino)
+            out.append(core.Item(f"{node}:{f}", it.scopes, node))
+        if not out:
+            raise core.Refused("no such input")
         return out
 
     def offload(self, task, inputs=(), returns=None, node=None):
@@ -386,10 +422,11 @@ class Door:
         srcs = views if returns is None and all(views) else [(i, False) for i in ins]
         n = self.pick_node([i for i, _ in srcs], node)
         everything = set(self.scopes.values()) <= self.nodes[n].trust
-        given = [(g, s or s2 or (self.mine(i) and not everything and bool(self.tags(i))))   # what the caller wrote:
+        reader = core.Node(n, self.nodes[n].trust & self.seen) if srcs is views else self.nodes[n]   # who sees the
+        given = [(g, s or s2 or (self.mine(i) and not everything and bool(self.tags(i, reader))))   # what the caller wrote:
                  for (i, s), (g, s2) in zip(srcs, (self.give(i, self.nodes[n]) for i, _ in srcs))]  # like its task
         scrub_task = given[-1][1] or not everything            # names it saw in this tool's text, too
-        task = self.vault.scrub(task, self.raw & set(self.scopes.values())) if scrub_task else task
+        task = self.vault.scrub(task, self.tags(ins[-1], reader), self.fresh) if scrub_task else task
         typed = set() if scrub_task else self.raw & set(self.scopes.values())   # a raw task's output may hold them
         with self.locks[n]:                                    # one decision at a time per node
             t0 = time.time()
@@ -398,14 +435,14 @@ class Door:
                        scrubbed=[s for _, s in given], row=row, bits=core.bits(returns) if row == "shaped" else 0)
             self.refs[out.ref] = out.scopes | typed
             turn, self.tickets[n] = self.tickets[n], self.tickets[n] + 1
-            run = lambda: self._run(n, given[:-1], task, returns, out, row, end, turn, everything)  # noqa: E731
+            run = lambda: self._run(n, given[:-1], task, returns, out, row, end, turn, everything, reader)  # noqa: E731
             if row == "full":                                  # the caller may see it: the node is surely idle
                 time.sleep(max(0.0, start - time.time()))
                 r = run()
                 self.slots[n] = (time.time(), frozenset())
                 output, raw = r.get("output"), {s.rstrip("~") for s in out.scopes} & self.seen
                 if output and (scrub_task or any(s for _, s in given)):
-                    output = self.vault.unscrub(output, raw)  # only this job's scopes, only those seen raw
+                    output = self.vault.unscrub(output, raw, self.fresh)   # this job's scopes seen raw, its own words
                 self.taint(out.scopes | raw)
                 return {"row": "full", "ref": out.ref, "output": output, "error": r.get("error")}
         result = {}
@@ -422,7 +459,7 @@ class Door:
         self._note(op="answer", ref=out.ref, answer=value)
         return {"row": "shaped", "answer": value, "ref": out.ref, "allowance_left": ledger}
 
-    def _run(self, n, given, task, returns, out, row, end, turn, everything):
+    def _run(self, n, given, task, returns, out, row, end, turn, everything, reader):
         """One job on node n. Staging and the model call both stop by `end`, the bound its slot was
         booked with, so no later job's timing depends on how long this one would have run."""
         node = self.p["nodes"][n]
@@ -434,11 +471,12 @@ class Door:
             self.turns[n].wait_for(lambda: self.serving[n] == turn)
         try:
             files = []
-            for i, s in given:
+            for i, s in [(x, s) for i, s in given for x in (self.expand(i) if i.ref in self.deferred else [i])]:
                 name = i.ref.rsplit("/", 1)[-1]
-                name = name if everything and not s else self.vault.scrub_name(name, self.tags(i))
+                name = name if everything and not s else self.vault.scrub_name(
+                    name, self.tags(i, reader), self.fresh if self.mine(i) else None)
                 files.append(i.ref.partition(":")[2] if i.node == n and not s else
-                             transport.put(node, node["stage"], name, self.bytes_of(i, s, left()), left()))
+                             transport.put(node, node["stage"], name, self.bytes_of(i, s, left(), reader), left()))
             core.run([core.move(g, self.nodes[n]) for g, _ in given], self.nodes[n], out.ref)
             r = transport.run_job(node, files, task, returns, out.ref.partition(":")[2], keep=row == "receipt",
                                   timeout=left(), salt=core.salt(self.salt_key, out.scopes))
