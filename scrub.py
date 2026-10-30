@@ -182,7 +182,12 @@ class Vault:
         for i, r in enumerate(self._pattern()):
             look = self.v["ids"] if i == 0 else self.forms
             text = r.sub(lambda m: (look[flat(m.group(1)).lower()] if i == 0 else look[m.group(1)]) + m.group(2), text)
-        return text
+
+        def camel(m):                                          # zorbinaQuellwaterSalary, ZorbinaQuellwater
+            humps = re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])", m.group(0))
+            hits = [None if h.lower() in COMMON else self.forms.get(h.title()) for h in humps]
+            return "".join(t or h for h, t in zip(humps, hits)) if any(hits) else m.group(0)
+        return re.sub(r"(?<![\w\[])[A-Za-z]*[a-z][A-Z][A-Za-z]*(?![\w\]])", camel, text) if self.v["parts"] else text
 
     def scrub_name(self, name, scopes):
         """A file name: whole first (emails, numbers), then piece by piece, `alice_nguyen-review.md` ->

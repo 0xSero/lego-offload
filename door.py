@@ -91,13 +91,15 @@ class Door:
         self.caller = caller                                    # the agent's own model
         self.me = self.nodes[caller] if caller else core.Node("", frozenset())
         self.seen = self.me.trust
-        self.taint_file = self.state / "taint.json"             # what the workspace holds, across sessions
+        self.taint_file = Path(os.environ.get("LEGO_TAINT", "~/.lego/taint.json")).expanduser()  # per workspace,
+        self.taint_file.parent.mkdir(parents=True, exist_ok=True)                            # every policy
         self.context = set(self._taints().get(self.ws, []))     # scopes given to the caller (its workspace too)
         self.vault = scrub.Vault(self.state / "vault.json")
         self.ledger_file = self.state / "ledger.json"
         if not self.ledger_file.exists():
             self.reset()
         self.refs, self.alias, self.inodes = {}, {}, {}         # result ref -> scopes; shown name -> ref; ref -> inode
+        self.learned = set()                                    # files the catalog found in the vault
         names = list(policy["nodes"])                           # the queue on each node (core.queue)
         self.slots = {n: (0.0, frozenset()) for n in names}
         self.locks = {n: threading.Lock() for n in names}
@@ -143,7 +145,6 @@ class Door:
         """Before anything crosses: learn the identifiers of every private file some model sees scrubbed.
         find(scope) gives a function that lists identifiers with a local model trusted with that scope."""
         scrubbed = {s[:-1] for n in self.nodes.values() for s in n.trust if s.endswith("~") and s[:-1] not in n.trust}
-        self.find = find
         for d in [d for d, s in self.scopes.items() if s in scrubbed]:
             node, _, root = d.partition(":")
             f = find(self.scopes[d]) if find else None
@@ -153,15 +154,19 @@ class Door:
                 self.learn(f"{node}:{path}", transport.read(self.p["nodes"][node], path, 600), self.scopes[d], f)
 
     def learn(self, ref, data, scope, f):
-        """A private file's identifiers, its path's included (a name can sit in a file name only)."""
+        """A private file's identifiers, its path's included (a name can sit in a file name only). Only
+        here, before the agent starts: learning later would take time that depends on the file."""
         if not self.vault.known(ref, data):
             rel = ref.partition(":")[2][len(next((d.partition(":")[2] for d, s in self.scopes.items() if s == scope), "")):]
             self.vault.learn(ref, data, [scope], f, also=re.sub(r"[/_]+", " ", rel))
 
     # ---------- the exchange ----------
-    def item(self, ref):
+    def item(self, ref, internal=False):
         """The caller's name for some data -> an item with its scopes. Refusals echo only `asked`."""
+        if not self.alias and not internal:
+            self.catalog()                                     # the names the caller may use
         asked, ref = ref, self.alias.get(ref, ref)             # a name shown scrubbed means its real file
+        internal = internal or asked in self.alias
         mine = [r for r in self.refs if r.partition(":")[2] == ref]
         ref = mine[0] if len(mine) == 1 else ref               # a result ref given without its node
         ref = f"{self.host}:{ref}" if ref.startswith("/") else ref
@@ -179,14 +184,20 @@ class Door:
                 self.inodes[f"{node}:{path}"] = (st.st_dev, st.st_ino)
         ref = f"{node}:{path}"
         scopes = self.refs[ref] if ref in self.refs else core.label(ref, self.public, self.scopes)
-        if scopes == {core.SEALED} and inside(path, self.ws) and node == self.host:
+        if node == self.host and inside(path, self.ws):
             scopes = frozenset(self.context)                   # the agent's own files hold what it was given
+        roots = [d for d, s in self.scopes.items() if s in scopes and d.startswith(node + ":")]
+        if not internal and ref not in self.refs and roots and not any(d == ref for d in roots) and \
+                not core.may_hold(self.me, scopes) and core.may_hold(self.me, core.scrubbed(scopes)):
+            raise core.Refused(f"name files in {sorted(scopes)} by the names listed (read \".\" lists them)")
         return core.Item(ref, scopes, node)
 
     def give(self, item, node):
         """The exchange rule: (item as `node` gets it, scrubbed?) or None."""
         if core.may_hold(node, item.scopes):
             return item, False
+        if item.ref in self.refs:                              # a model's output: scrubbing cannot clean it
+            return None
         s = core.scrubbed(item.scopes)
         return ((core.Item(item.ref, s, item.node), True) if core.may_hold(node, s) else None)
 
@@ -206,10 +217,8 @@ class Door:
         else:
             data = transport.read(self.p["nodes"][node], path, timeout)
         tags = {s.rstrip("~") for s in item.scopes}
-        if scrubbed and set(self.scopes.values()) & tags and not item.ref.startswith(("task", f"{self.host}:{self.ws}/")):
-            scope = next(iter(set(self.scopes.values()) & tags))
-            f = getattr(self, "find", None)
-            self.learn(item.ref, data, scope, f(scope) if f else None)   # a file that came after prepare
+        if scrubbed and not item.ref.startswith(f"{self.host}:{self.ws}/") and not self.vault.known(item.ref, data):
+            raise core.Refused("a private file changed or appeared after lego started: restart lego to learn it")
         return self.vault.scrub(data.decode(errors="replace"), tags).encode() if scrubbed else data
 
     def level(self, scope, node=None):
@@ -227,11 +236,19 @@ class Door:
                 "everything": "", "scrubbed": " (same data; names, emails, phones, addresses, account numbers "
                 "and keys replaced by stable placeholders such as [PERSON_3])",
                 "nothing": f" ({len(found)} files, names hidden: pass the directory to offload with `returns`)"}[lvl])
+            raw = lvl == "everything" and all(s in v.trust for n, v in self.nodes.items() if runnable(self.p["nodes"][n]))
+            new = 0
             for f in found[:60] if lvl != "nothing" else []:
-                name = f"{shown}{f[len(root):]}" if lvl == "everything" else \
-                    f"{shown}{self.vault.scrub_name(f[len(root):], [s])}"
+                if f"{node}:{f}" not in self.learned and not raw and not self.vault.known(
+                        f"{node}:{f}", transport.read(self.p["nodes"][node], f)):
+                    new += 1                                   # not learned: its name may hold an identifier
+                    continue
+                name = f"{shown}{f[len(root):] if raw else self.vault.scrub_name(f[len(root):], [s])}"
                 self.alias[name] = f"{node}:{f}"
+                self.learned.add(f"{node}:{f}")
                 lines.append("    " + name)
+            if new:
+                lines.append(f"    ({new} files added since lego started: restart lego to use them)")
         lines += [f"  {r}" for r in self.p.get("catalog", [])]
         return "\n".join(lines) or "  (none)"
 
@@ -246,14 +263,16 @@ class Door:
     def read(self, ref):
         it = self.item(ref.strip() or ".")
         path = it.ref.partition(":")[2]
-        if it.node == self.host and os.path.isdir(path) or any(inside(d.partition(":")[2], path) for d in self.scopes):
-            return {"row": "listing", "text": self.listing()}  # a directory: what is in it, at your level
+        if any(inside(d.partition(":")[2], path) for d in self.scopes) or it.ref == f"{self.host}:{self.ws}":
+            return {"row": "listing", "text": self.listing()}  # what you can name, at your level
         if core.SEALED in it.scopes:
             raise core.Refused(f"{ref} is sealed. You can read files listed under the private directories, files in "
                                f"your workspace {self.ws}, and offload refs as returned. read \".\" lists them.")
         got = self.give(it, self.me)
         if not got:
             raise core.Refused(f"you may not see {sorted(it.scopes)}; ask about it with offload and `returns`")
+        if it.node == self.host and os.path.isdir(path):     # only once the level allows it
+            return {"row": "listing", "text": self.listing()}
         if it.node == self.host and not os.path.isfile(path):
             raise core.Refused(f"no file {ref}. read \".\" lists what you can name.")
         text = self.bytes_of(*got).decode(errors="replace")
@@ -295,7 +314,7 @@ class Door:
             it = self.item(r)
             node, _, path = it.ref.partition(":")
             found = [] if it.ref in self.refs or core.SEALED in it.scopes else transport.files(self.p["nodes"][node], path)
-            out += [self.item(f"{node}:{f}") for f in found] if found and found != [path] else [it]
+            out += [self.item(f"{node}:{f}", internal=True) for f in found] if found and found != [path] else [it]
         return out
 
     def offload(self, task, inputs=(), returns=None, node=None):
@@ -345,7 +364,10 @@ class Door:
         """One job on node n. Staging and the model call both stop by `end`, the bound its slot was
         booked with, so no later job's timing depends on how long this one would have run."""
         node = self.p["nodes"][n]
-        left = lambda: max(1.0, end - time.time())             # noqa: E731
+        def left():
+            if time.time() >= end:
+                raise TimeoutError("the job reached its bound")
+            return end - time.time()
         with self.turns[n]:                                    # first in, first out: one job at a time
             self.turns[n].wait_for(lambda: self.serving[n] == turn)
         try:

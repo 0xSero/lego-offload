@@ -20,6 +20,7 @@ workspace is the policy's "workspace", or the current directory. State lives in 
 to the policy.
 """
 import fcntl
+import hashlib
 import json
 import os
 import shutil
@@ -62,11 +63,15 @@ def session(policy, state, agent, args, capture=None, timeout=None, tty=False):
     model = policy["nodes"][me]["model"] if me else None
     upstream = upstream or model["url"].removesuffix("/v1")
     Path(state).mkdir(parents=True, exist_ok=True)
-    lock = open(Path(state) / "session.lock", "w")             # one door per node: its queue must see every job
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    locks = Path("~/.lego/locks").expanduser()
+    locks.mkdir(parents=True, exist_ok=True)
+    ws_key = hashlib.sha256(os.path.realpath(policy["workspace"]).encode()).hexdigest()[:16]
+    held = [open(Path(state) / "session.lock", "w"), open(locks / f"{ws_key}.lock", "w")]
+    try:                                                       # one door per node (its queue sees every job),
+        for lock in held:                                      # one session per workspace (its label is shared)
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        raise SystemExit("lego: another session is using this policy's nodes; run one at a time")
+        raise SystemExit("lego: another session is using this policy's nodes or this workspace; run one at a time")
     d = door.Door(policy, state, me)
     if not d.context <= d.seen:
         raise SystemExit(f"lego: the workspace holds {sorted(d.context - d.seen)} data from an earlier session, which "
@@ -87,7 +92,8 @@ def session(policy, state, agent, args, capture=None, timeout=None, tty=False):
         shutil.rmtree(home, ignore_errors=True)
         for job in d.jobs:                                     # the node is busy until its jobs end
             job.join()
-        lock.close()
+        for lock in held:
+            lock.close()
 
 
 def find_policy(argv):

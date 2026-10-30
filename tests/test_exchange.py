@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+os.environ["LEGO_TAINT"] = tempfile.mkdtemp() + "/taint.json"           # not the user's
 import door  # noqa: E402
 import transport  # noqa: E402
 
@@ -158,11 +159,32 @@ def test_second_hunt_stays_fixed():
         fwd.prepare(lambda scope: lambda text: [("PERSON", "Varnella Oxtrude")] if "Varnella" in text else [])
         assert not leaked(fwd.about()), fwd.about()                          # the catalog the cloud sees
         (t / "hr/late.csv").write_text("name,salary\nPellamy Strand,99000\n")   # arrived after prepare
-        assert not leaked(fwd.read(str(t / "hr/late.csv"))["text"])
+        fwd2 = door.Door({**p, "workspace": str(t / "ws3")}, t / "state3", "cloud")
+        assert "1 files added since lego started" in fwd2.about() and not leaked(fwd2.about())
+        for probe in (str(t / "hr/late.csv"), str(t / "hr/Pellamy_Strand.md")):
+            assert "refused" in refusal(fwd2, "read", path=probe), probe     # raw names are not accepted
+
+
+def test_third_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        d = door.Door(p, t / "state", "cloud")
+        d.prepare(lambda scope: lambda text: [])
+        r = d.offload("names", [str(t / "hr/people.csv")], {"bool": True})   # a result on raw hr
+        assert "refused" in refusal(d, "read", path=r["ref"])                # is never handed back scrubbed
+        assert refusal(d, "read", path=str(t / "keys/nope")) == refusal(d, "read", path=str(t / "keys/prod.env"))
+        pub = dict(p, public=[str(t / "ws/pub.md")])                         # a public file in the workspace
+        (t / "ws/pub.md").write_text("x")
+        rev = door.Door(pub, t / "state", "pop")
+        rev.read(str(t / "hr/people.csv"))
+        assert "hr" in rev.item("pub.md").scopes                             # still carries what pop read
+        assert "[PERSON_" in rev.vault.scrub("zorbinaQuellwaterSalary and ZorbinaQuellwater", {"hr"})
+        for j in d.jobs:
+            j.join()
 
 
 if __name__ == "__main__":
     for f in (test_levels, test_forward_cloud_in_front, test_reverse_local_in_front, test_found_leaks_stay_fixed,
-              test_second_hunt_stays_fixed):
+              test_second_hunt_stays_fixed, test_third_hunt_stays_fixed):
         f()
         print("ok  ", f.__name__)

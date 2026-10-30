@@ -11,6 +11,7 @@ door sent to the cloud model (its traces). Tasks are checked against the real an
 import csv
 import glob
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -132,6 +133,7 @@ def run(agent, prompts, policy, state, extra, canaries, root):
 
 def main(dest=None):
     root = Path(tempfile.mkdtemp(prefix="lego-twoway-"))
+    os.environ["LEGO_TAINT"] = str(root / "taint.json")          # the test's workspace label, not the user's
     try:
         simple, canaries = make(root)
         state = root / ".lego"
