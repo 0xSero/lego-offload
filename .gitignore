@@ -2,5 +2,4 @@ __pycache__/
 .lego/
 verify/runs/
 results/e2e_capture/
-room_probe/
 .out.hvm

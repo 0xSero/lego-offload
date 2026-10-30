@@ -43,7 +43,6 @@ def main(out, trials):
         random.Random(1).shuffle(plan)
         for side, name in plan:
             d.reset()
-            t0 = time.time()
             first = d.offload(PRIVATE.format(name=name), [hr])
             time.sleep(GAP)                                     # let the private job start generating
             t1 = time.time()

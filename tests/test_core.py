@@ -122,11 +122,6 @@ def test_clock_and_release():
     assert core.release_plan(a, {"bool": True}, led) == ("shaped", {"a": 0})
     assert core.release_plan(a, {"int": [0, 7]}, led) == ("receipt", led)    # 4 bits > 2 left
     assert core.release_plan(sealed, {"int": [0, 0]}, {"a": 9, SEALED: 9}) == ("receipt", {"a": 9, SEALED: 9})
-    # the reply never depends on the value except through the declared shape
-    for v, took in itertools.product([True, "leak", 10**9], [0, 9, 99]):
-        assert core.deliver("receipt", v, None, took, 30) == (0, core.RECEIPT)
-        t, reply = core.deliver("shaped", v, {"bool": True}, took, 30)
-        assert t == 30 and reply in (True, UNKNOWN)
 
 
 def test_queue():

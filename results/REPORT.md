@@ -1,61 +1,17 @@
 # Lego offload: results
 
-Implementation: 1046 lines (core.py 202, door.py 217, transport.py 84, route.py 185, room.py 40, agents.py 105, lego.py 93, room/room.sb 120).
-commit: 516c4d8
+Implementation: 1012 lines (core.py 193, door.py 217, transport.py 84, route.py 173, room.py 40, agents.py 104, lego.py 93, room/room.sb 108).
+commit: dfefb4d
 
 ## Agent adapters (no model): credentials and wiring of every room
 
 ```
-9 host credentials to look for
+8 host credentials to look for
 ok   claude  credentials in room: 0, model via route: True, tools via door: True, upstream hosts named: none, upstream anthropic
 ok   codex   credentials in room: 0, model via route: True, tools via door: True, upstream hosts named: none, upstream codex
 ok   cursor  credentials in room: 0, model via route: True, tools via door: True, upstream hosts named: none, upstream cursor
 ok   cline   credentials in room: 0, model via route: True, tools via door: True, upstream hosts named: none, upstream openrouter
 ```
-
-## Brick laws (Bend, checked against core.py)
-
-```
-L1 lattice 512 cases, 0 failures | L2 trust 4096, 0 | L3 shape cost 65536, 0, Bend bits sum 983058 vs core.bits 983058, 17-bit size refused: True | L4 charge 512, 0
-LEMMAS OK
-```
-
-## Model check (Bend BFS, every reachable state, state counts, depths and every counterexample cross-checked against core.py)
-
-| variant | states | containment | noninterference | budget |
-|---|---|---|---|---|
-| all bricks | 884 | holds | holds | holds |
-| label fails open | 745 | FAIL at step 1 | FAIL at step 1 | FAIL at step 1 |
-| no move check | 884 | FAIL at step 1 | holds | holds |
-| run drops labels | 13 | holds | FAIL at step 1 | holds |
-| no shape | 157 | holds | FAIL at step 1 | holds |
-| no budget | 884 | holds | holds | FAIL at step 1 |
-| no clock | 157 | holds | FAIL at step 1 | holds |
-
-All 512 trust topologies: 0 violations over 340664 states. Mutants caught, out of 512 topologies each: label fails open 448, no move check 504, run drops labels 511, no shape 504, no budget 511, no clock 504. Bend agrees with core.py: True.
-
-## Leak counting (16 secret worlds, every attack of up to 3 offloads)
-
-A trace holds when, per scope, the attacker's observations split the secret worlds into at most 2^(bits charged) classes.
-
-| variant | traces | hr | acme | sealed | total | max hr classes | Bend = core |
-|---|---|---|---|---|---|---|---|
-| all bricks | 338845 | holds | holds | holds | holds | 3 | True |
-| label fails open | 365890 | holds | holds | FAIL@1 | FAIL@1 | 3 | True |
-| no move check | 338845 | holds | holds | holds | holds | 3 | True |
-| run drops labels | 30667 | FAIL@1 | FAIL@1 | FAIL@1 | FAIL@1 | 4 | True |
-| no shape | 280744 | FAIL@1 | holds | holds | FAIL@1 | 4 | True |
-| no budget | 85357 | FAIL@1 | FAIL@1 | FAIL@1 | FAIL@1 | 3 | True |
-| no clock | 280744 | FAIL@1 | holds | holds | FAIL@1 | 4 | True |
-
-## Shared prompt cache (8 secret worlds, every attack of up to 4 jobs)
-
-A trace holds when the reply times of public jobs are the same in every secret world.
-
-| variant | traces | violating | noninterference | max classes | Bend = core |
-|---|---|---|---|---|---|
-| salted by scope | 111150 | 0 | holds | 1 | True |
-| one shared cache | 111150 | 21376 | FAIL@2 | 4 | True |
 
 ## Unbounded proof (Lean 4, `verify/Lego.lean`)
 

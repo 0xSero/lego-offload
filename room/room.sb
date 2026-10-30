@@ -1,14 +1,5 @@
-;; room.sb -- deny-by-default Room for a coding agent (Claude Code, Codex, Cursor, Cline).
-;;
-;; Parameters (all required, pass with sandbox-exec -D NAME=value):
-;;   WS          workspace dir (read/write), realpath, e.g. /private/tmp/room/ws
-;;   HOME_DIR    throwaway HOME (read/write), realpath
-;;   AGENT_DIR   realpath of the directory holding the agent and its runtime (read + exec)
-;;   ROUTE_PORT  localhost port of the Route (API proxy)
-;;   DOOR_PORT   localhost port of the Door (MCP HTTP server)
-;;
-;; Paths must be realpaths (/private/tmp, not /tmp): the sandbox matches the
-;; resolved vnode path.
+;; room.sb -- deny-by-default Room for a coding agent. Parameters (sandbox-exec -D): WS, HOME_DIR,
+;; AGENT_DIR (realpaths: the sandbox matches resolved paths), ROUTE_PORT, DOOR_PORT. See room.py.
 
 (version 1)
 (deny default)
@@ -20,9 +11,7 @@
        (subpath "/bin")
        (subpath "/usr/bin")
        (literal "/usr/libexec/path_helper"))
-;; BEGIN deputy-exec-deny  (defence in depth: these are also blocked by the
-;; mach-lookup / network / file layers below; probes.sh --no-exec-deny strips
-;; this block to prove that)
+;; deputies, denied by name (defence in depth: the layers below block them too)
 (deny process-exec
       (literal "/usr/bin/osascript")
       (literal "/usr/bin/open")
@@ -43,7 +32,6 @@
       (literal "/usr/bin/sudo")
       (literal "/usr/bin/login")
       (literal "/usr/bin/su"))
-;; END deputy-exec-deny
 (allow signal (target same-sandbox))
 (allow process-info* (target same-sandbox))
 (allow sysctl-read)

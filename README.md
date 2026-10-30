@@ -17,7 +17,7 @@ lego cline -y "How many people in hr earn over 150k?"
   - **Private inputs:** a small typed answer (an int, a bool or an enum), paid for in bits from a per-scope allowance and delivered at a fixed time.
   - **Anything else:** a receipt.
 
-The design is checked six ways. Five are in Bend, each cross-checked against the real code: brick laws, an exhaustive model check, leak counting, the shared prompt cache, and a simulation. The sixth is a Lean proof with no size bound: for any policy, any adaptive strategy and any number of calls, the agent learns at most its allowance in bits, counting answers, reply times, the node's queue and its prompt cache. That model is then run against the real door. Every agent is also tested end to end with real models on synthetic private data.
+The design is proved in Lean with no size bound: for any policy, any adaptive strategy and any number of calls, the agent learns at most its allowance in bits, counting answers, reply times, the node's queue and its prompt cache. The Lean model is run against the real door to check they decide alike. A Bend simulation estimates how useful the system is, and every agent is tested end to end with real models on synthetic private data.
 
 ```
  Mac (host, trusted with every scope)
@@ -65,7 +65,7 @@ Requirements:
 | Cline | `cline` (3.x) | the OpenRouter key Cline is set up with | openrouter.ai |
 
 - A machine with a local model behind an OpenAI-compatible endpoint, reachable by ssh (here `gpu-box`, vLLM on `127.0.0.1:8000`).
-- For `./run verify`: [Bend](https://github.com/HigherOrderCO/Bend) 0.2.38.
+- For `./run verify`: Lean 4 (via elan, core only). For `./run sim`: [Bend](https://github.com/HigherOrderCO/Bend) 0.2.38.
 
 ## How you use it
 
@@ -128,8 +128,7 @@ Reply rows:
 ```
 ./run            # everything: unit, verify, sim, e2e, then results/REPORT.md
 ./run unit       # bricks, sandbox probes, every agent adapter (no model)
-./run verify     # Bend: brick laws, model check, leak counting, shared prompt cache;
-                 # Lean: the unbounded proof, then the Lean model against the real door
+./run verify     # Lean: the proof, then the Lean model against the real door
 ./run sim        # Bend Monte Carlo: answered rate vs allowance and deadline
 ./run e2e        # real models: every agent × every case on synthetic private data
 ```
@@ -176,52 +175,32 @@ The reply row is chosen from labels, the ledger and the node's queue alone, befo
 
 | File | Lines | What |
 |-|-|-|
-| `core.py` | 202 | The seven bricks and the cache salt. Pure: no I/O, no clock, no network |
+| `core.py` | 193 | The seven bricks and the cache salt. Pure: no I/O, no clock, no network |
 | `door.py` | 217 | The `offload` tool, served as MCP over HTTP on localhost. Asks `core.py` at every step |
 | `transport.py` | 84 | Carries out moves and runs over ssh. Calls the node's model with constrained JSON decoding and the scope's cache salt |
-| `route.py` | 185 | Localhost proxy to each agent's cloud. Strips the room's placeholder, injects the real credential, captures every exchange decompressed |
-| `room.py` + `room/room.sb` | 40 + 120 | The sandbox. Deny by default: the workspace, a throwaway HOME, the agent's install directory, and the two ports |
-| `agents.py` | 105 | One adapter per agent: config pointing the model at the route and tools at the door |
+| `route.py` | 173 | Localhost proxy to each agent's cloud. Strips the room's placeholder, injects the real credential, captures every exchange decompressed |
+| `room.py` + `room/room.sb` | 40 + 108 | The sandbox. Deny by default: the workspace, a throwaway HOME, the agent's install directory, and the two ports |
+| `agents.py` | 104 | One adapter per agent: config pointing the model at the route and tools at the door |
 | `lego.py` + `lego` | 93 + 3 | The CLI. One session at a time per policy, so the door's queue sees every job |
-| **implementation** | **1,049** | app, tests and verification excluded |
+| **implementation** | **1,015** | app, tests and verification excluded |
 | `app.py` + `app.html` | 157 + 141 | `lego app`: a local page to run tasks and watch the door |
-| `verify/` | | Formal verification: Bend with Python twins, and `Lego.lean` (1,004 lines) with `twin.py`. See [`verify/README.md`](verify/README.md) |
+| `verify/` | | `Lego.lean` (the proof), `twin.py` (Lean vs the door), `sim.bend` + `sim_ref.py` (the simulation). See [`verify/README.md`](verify/README.md) |
 | `tests/` | | `test_core.py`, `test_queue.py`, `test_room.py`, `test_agents.py`, `e2e.py`, `contention.py`, `traces.py`, `report.py` |
-| `results/` | | Output of the last `./run`, including `REPORT.md` |
+| `results/` | | Output of the last `./run`: `REPORT.md`, the data behind it, and the e2e traces |
 
 ## Results
 
 All numbers come from the last `./run`. [`results/REPORT.md`](results/REPORT.md) has every table, and each e2e row links to its trace.
 
-**Formal verification (Bend, every number cross-checked against the real `core.py`):**
+**Verification:**
 
 | Check | Size | Result |
 |-|-|-|
-| Brick laws | 70,656 cases | 0 failures |
-| Model check, all bricks | 512 trust topologies, 340,664 states | 0 violations of contain, noninterference or budget. A private answer is reachable in 504 topologies (the other 8 have no node that may hold hr) |
-| Model check, mutants | 6 bricks switched off × 512 topologies | caught in 448–511 topologies each. The rest are topologies where that brick has nothing to do |
-| Leak counting | 338,845 attack traces of up to 3 offloads, 16 secret worlds | every per-scope bound holds, sealed is never distinguished, at most 3 hr classes from 2 bits |
-| Shared prompt cache | 111,150 attack traces of up to 4 jobs, 8 secret worlds | salted by scope: public reply times identical in every world. One shared cache: caught at 2 jobs, up to 4 worlds told apart |
-| Unbounded proof (Lean 4) | any policy, any number of nodes, scopes and calls, any adaptive strategy | `leak_bound`, `sealed_hidden`, `held_trusted`, `budget` and `reply_times` proved, with no `sorry`. 7 rule-off counterexamples checked by `decide` |
+| Lean proof | any policy, any number of nodes, scopes and calls, any adaptive strategy | `leak_bound`, `sealed_hidden`, `held_trusted`, `budget` and `reply_times` proved, with no `sorry` |
+| Every rule is load-bearing | queue, salt, clock, charge, shape, run, move switched off one at a time | each gives a concrete two-world leak, checked by `decide` |
 | Lean model vs real door | 2,000 random cases, 15,092 calls | every row, scope set, charge, ledger and queue slot agrees. Two planted bugs in `core.queue` and `core.book` were caught |
 
-Mutants on the standard topology, where FAIL@1 means the attack takes one offload:
-
-| Brick removed | contain | noninterference | budget | leak bound |
-|-|-|-|-|-|
-| none | holds | holds | holds | holds |
-| label | FAIL@1 | FAIL@1 | FAIL@1 | FAIL@1 (sealed) |
-| move | FAIL@1 | holds | holds | holds |
-| run | holds | FAIL@1 | holds | FAIL@1 |
-| shape | holds | FAIL@1 | holds | FAIL@1 |
-| budget (charge) | holds | holds | FAIL@1 | FAIL@1 |
-| clock | holds | FAIL@1 | holds | FAIL@1 |
-| cache salt | | FAIL@2 | | |
-| queue | | FAIL@2 (Lean) | | |
-
-Every brick is load-bearing: removing any one breaks a property within two steps.
-
-**Contention, measured on gpu-box.** A free private job ran 20 to 28 s or under 0.5 s, depending on a salary. Three seconds after it started, a public job was sent to the same node. Before the queue, the public reply took 2.56 s longer on average when the salary was high (8 trials per side, one-sided permutation p = 0.010): an uncharged channel. With the queue, every public reply waits until the node is surely idle, and the difference is 0.12 s (p = 0.47). Details in [`verify/README.md`](verify/README.md#6-unbounded-proof-legolean).
+**Contention, measured on gpu-box.** A free private job ran 20 to 28 s or under 0.5 s, depending on a salary. Three seconds after it started, a public job was sent to the same node. Before the queue, the public reply took 2.56 s longer on average when the salary was high (8 trials per side, one-sided permutation p = 0.010): an uncharged channel. With the queue, every public reply waits until the node is surely idle, and the difference is 0.12 s (p = 0.47). Details in [`verify/README.md`](verify/README.md#contention-why-the-queue-exists).
 
 **Agent adapters (no model):** for each of the four agents, the throwaway HOME, argv and environment hold none of the host's 9 credentials, the model points at the route, the tools at the door, and no upstream host is named. The sandbox passes 15 probes, including another localhost service, other apps' preferences and the keychain.
 
@@ -245,7 +224,7 @@ Every brick is load-bearing: removing any one breaks a property within two steps
 - read the user's files outside its workspace (system files such as `/etc/hosts` stay readable, because the agent binaries need them), reach the network beyond the route and the door, reach any other localhost service, use ssh, read the keychain or other apps' preferences, or run deputies (`osascript`, `open`, `launchctl`): the sandbox blocks these, as checked in `tests/test_room.py`;
 - read the credential its own model calls use: the route injects it, as checked in `tests/test_agents.py`;
 - get private bytes through the door: replies are full only when every input is public;
-- learn more about a scope than its allowance: the ledger is charged before the job runs, and the model check and leak counting prove the bound;
+- learn more about a scope than its allowance: the ledger is charged before the job runs, and `leak_bound` proves the bound;
 - use timing: shaped replies arrive at a fixed deadline, the node's prompt cache is salted by scope, jobs on a node are queued so a public reply never overlaps private work, and the policy refuses a host that also runs a model (shared CPU and GPU);
 - name its way around the labels: unlisted paths are sealed, and policies with a public path inside a scope are refused.
 

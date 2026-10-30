@@ -255,12 +255,6 @@ theorem getAll_mem {items : List Item} : ∀ {is : List Nat} {ins : List Item},
 theorem agreeOn_mono {L M : Label} {w w' : World} (hLM : ∀ s ∈ L, s ∈ M) (h : agreeOn M w w') :
     agreeOn L w w' := fun s hs => h s (hLM s hs)
 
-theorem dependsOn_mono {α : Type} {g : World → α} {L M : Label} (hLM : ∀ s ∈ L, s ∈ M)
-    (h : dependsOn g L) : dependsOn g M := fun w w' hw => h w w' (agreeOn_mono hLM hw)
-
-theorem dependsOn_nil {α : Type} {g : World → α} (h : dependsOn g []) (w w' : World) : g w = g w' :=
-  h w w' (fun s hs => by simp at hs)
-
 theorem any_congr {α : Type} {l : List α} {p q : α → Bool} (h : ∀ x ∈ l, p x = q x) : l.any p = l.any q := by
   induction l with
   | nil => rfl
@@ -283,9 +277,6 @@ theorem canCharge_spec {P : Policy} {σ : St} {O : Label} {b : Nat} (h : canChar
 theorem rowOf_full {c P σ O r} (h : rowOf c P σ O r = .full) : O = [] := by
   unfold rowOf at h
   split at h <;> (split at h <;> first | assumption | (try split at h) <;> simp at h)
-
-theorem rowOf_nil {c P σ r} : rowOf c P σ [] r = .full := by
-  unfold rowOf; split <;> simp
 
 theorem rowOf_shaped {c P σ O r} (h : rowOf c P σ O r = .shaped) :
     ∃ k pick, r = some (k, pick) ∧ O ≠ [] ∧ (c.charge = true → canCharge P σ O (bits k) = true) := by
@@ -582,17 +573,6 @@ theorem step_facts (hI : Inv P σ) (a : Act) :
           · exact Or.inr (Or.inl rfl)
     · exact ⟨hI, fun _ _ _ => rfl, by simp, fun _ _ _ _ => rfl, by simp, fun _ => Nat.le_refl _, by simp,
         fun _ => Or.inl rfl⟩
-
-theorem step_sealed (a : Act) (h : (step real P σ a).2.1.row = .shaped) : P.sealed ∉ (step real P σ a).2.1.label := by
-  revert h
-  unfold step
-  split
-  · simp
-  · rename_i ins hins
-    split
-    · intro h
-      exact (paid_spec (by simp [Step.paid]; exact h)).1
-    · simp
 
 end step2
 

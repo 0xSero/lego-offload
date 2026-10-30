@@ -1,8 +1,8 @@
-"""Lego core: three types and six bricks for moving data and work between machines.
+"""Lego core: three types and seven bricks for moving data and work between machines.
 
 Pure: no I/O, no clock, no network. Adapters (door, transport, room) do the I/O and
-ask these functions what is allowed. model.bend checks the same rules exhaustively,
-and model_ref.py drives these exact functions to cross-check Bend.
+ask these functions what is allowed. verify/Lego.lean proves the same rules, and
+verify/twin.py checks it against these functions.
 
 Types:  Scope = str      a name such as "hr"; an empty scope set means public
         Node(name, trust)          a machine and the scopes it may hold
@@ -17,7 +17,6 @@ from dataclasses import dataclass
 
 SEALED = "sealed"          # scope of every path nobody listed; no allowance, ever
 UNKNOWN = "UNKNOWN"        # the one value a shaped reply takes when anything goes wrong
-RECEIPT = {"status": "received"}
 MAX_BITS = 16              # widest single answer (red team: one 63-bit int carried 3 facts)
 
 
@@ -192,11 +191,3 @@ def release_plan(item, schema, ledger):
     except Refused:
         return "receipt", ledger
 
-
-def deliver(row, value, schema, took, deadline):
-    """Returns (seconds_after_submit, reply)."""
-    if row == "full":
-        return 0, value
-    if row == "receipt":
-        return 0, RECEIPT
-    return deadline, clock(shape(value, schema), took, deadline)

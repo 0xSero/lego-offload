@@ -45,23 +45,11 @@ def openrouter_auth():
     return {"Authorization": "Bearer " + json.load(open(os.path.expanduser("~/.cline/data/secrets.json")))["openRouterApiKey"]}
 
 
-def zai_auth():
-    """providers.zai.apiKey from omp's models.yml (stdlib scan, no yaml dependency)."""
-    inside = False
-    for line in open(os.path.expanduser("~/.omp/agent/models.yml")):
-        if line.startswith("  ") and not line.startswith("   ") and line.strip().endswith(":"):
-            inside = line.strip() == "zai:"
-        elif inside and line.strip().startswith("apiKey:"):
-            return {"Authorization": "Bearer " + line.split(":", 1)[1].strip().strip("'\"")}
-    raise RuntimeError("providers.zai.apiKey not found")
-
-
 # name: (host, path prefixes the agent may use, headers carrying the real credential, anthropic-beta to add)
 UPSTREAMS = {"anthropic": ("api.anthropic.com", ("/v1/",), claude_auth, "oauth-2025-04-20"),
              "codex": ("chatgpt.com", ("/backend-api/codex/",), codex_auth, None),
              "cursor": ("api2.cursor.sh", ("/",), cursor_auth, None),
-             "openrouter": ("openrouter.ai", ("/api/v1/",), openrouter_auth, None),
-             "zai": ("api.z.ai", ("/api/coding/paas/v4/",), zai_auth, None)}
+             "openrouter": ("openrouter.ai", ("/api/v1/",), openrouter_auth, None)}
 
 
 def gunzip(b):

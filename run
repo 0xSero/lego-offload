@@ -2,9 +2,7 @@
 # One command for everything: ./run            (or ./run unit|verify|sim|e2e)
 # unit    brick tests, the sandbox room probed with plain binaries, and every agent adapter
 #         checked for credentials and wiring (no model)
-# verify  Bend: brick laws, every-topology model check, 16-world leak counting, the shared
-#         prompt cache; each cross-checked against a Python twin that drives the real core.py.
-#         Lean: the leak bound proved for any policy, any number of calls, any adaptive
+# verify  Lean: the leak bound proved for any policy, any number of calls, any adaptive
 #         strategy (timing, queue, cache included), then the Lean model run against the door
 # sim     Bend Monte Carlo of a working day (budget x reply time), checked bit-exact
 # e2e     real models: private data on gpu-box; Claude Code, Codex, Cursor and Cline each in
@@ -18,34 +16,13 @@ step() { printf '\n== %s\n' "$*"; }
 
 unit() {
   step unit
-  t 300 python3 tests/test_core.py | tee results/unit.txt
-  t 300 python3 tests/test_queue.py | tee -a results/unit.txt
-  t 300 python3 tests/test_room.py | tee results/room.txt
+  t 300 python3 tests/test_core.py
+  t 300 python3 tests/test_queue.py
+  t 300 python3 tests/test_room.py
   t 300 python3 tests/test_agents.py | tee results/agents.txt
 }
 
 verify() {
-  step "verify: brick laws"
-  t 600 bend run-c verify/lemmas.bend -s > $R/lemmas_raw.txt
-  (cd verify && t 600 python3 lemmas_ref.py runs/lemmas_raw.txt) | tee results/lemmas.txt
-  step "verify: model check, 7 mutants + 9 allowances + 512 topologies + 3072 mutant runs"
-  rm -f $R/bend_raw_*
-  for p in 0 1 2 3 4 5 6; do                    # HVM sometimes leaves a term unreduced: retry that part
-    f=$R/bend_raw_$p.txt
-    t 3600 bend run-c verify/model.bend $p -s > $f
-    for k in 2 3; do
-      grep -q '^Result.*\$' $f || break
-      f=$R/bend_raw_${p}_try$k.txt
-      t 3600 bend run-c verify/model.bend $p -s > $f
-    done
-  done
-  (cd verify && t 7200 python3 model_ref.py runs/ref.json && t 600 python3 check.py runs/bend_raw runs/ref.json ../results/model_check.json) | tee results/model_check.txt
-  step "verify: leak counting over 16 secret worlds, every 3-step attack"
-  for k in 1 2 3; do t 3600 bend run-c verify/qif.bend -s > $R/qif_raw.txt; grep -q '^Result.*\$' $R/qif_raw.txt || break; done
-  (cd verify && t 3600 python3 qif_ref.py 3 runs/qif_ref.json && t 60 python3 qif_check.py runs/qif_raw.txt runs/qif_ref.json ../results/qif.json) | tee results/qif.txt
-  step "verify: shared prompt cache over 8 secret worlds, every 4-job attack"
-  for k in 1 2 3; do t 600 bend run-c verify/cache.bend -s > $R/cache_raw.txt; grep -q '^Result.*\$' $R/cache_raw.txt || break; done
-  (cd verify && t 600 python3 cache_ref.py runs/cache_raw.txt ../results/cache.json) | tee results/cache.txt
   step "verify: Lean proofs for any number of nodes, scopes and steps, against any adaptive strategy"
   { cat verify/Lego.lean; for th in leak_bound sealed_hidden held_trusted budget reply_times $(sed -n \
       's/^theorem \(mutant_[a-z]*\).*/Mutants.\1/p' verify/Lego.lean); do echo "#print axioms Lego.$th"; done; } > $R/LegoAxioms.lean
@@ -59,10 +36,10 @@ verify() {
 sim() {
   step "sim: 8192 sessions x 15 cells"
   t 900 bend run-c verify/sim.bend -s > $R/sim_raw.txt
-  (cd verify && t 900 python3 sim_ref.py runs/sim_raw.txt ../results/sim.json) | tee results/sim.txt
+  (cd verify && t 900 python3 sim_ref.py runs/sim_raw.txt ../results/sim.json)
 }
 
-e2e() { step "e2e: real models, every agent"; t 14400 python3 tests/e2e.py results/e2e.json | tee results/e2e.txt; }
+e2e() { step "e2e: real models, every agent"; t 14400 python3 tests/e2e.py results/e2e.json; }
 
 case "${1:-all}" in
   unit) unit ;; verify) verify ;; sim) sim ;; e2e) e2e ;;

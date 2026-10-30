@@ -9,7 +9,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import time
 import tomllib
 from pathlib import Path

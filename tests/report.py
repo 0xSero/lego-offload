@@ -27,35 +27,6 @@ out += [f"Implementation: {sum(loc.values())} lines ({', '.join(f'{f} {n}' for f
 if ag := load("agents.txt"):
     out += ["## Agent adapters (no model): credentials and wiring of every room\n", "```", ag.strip(), "```\n"]
 
-if lem := load("lemmas.txt"):
-    out += ["## Brick laws (Bend, checked against core.py)\n", "```", lem.strip(), "```\n"]
-
-if mc := load("model_check.json"):
-    out += ["## Model check (Bend BFS, every reachable state, state counts, depths and every counterexample cross-checked against core.py)\n",
-            table(["variant", "states", "containment", "noninterference", "budget"],
-                  [[m["variant"], m["states"]] + ["holds" if m[e] == 99 else f"FAIL at step {m[e]}"
-                                                   for e in ("contain", "noninterference", "budget")]
-                   for m in mc["mutants"]]), "",
-            f"All {mc['topologies']['count']} trust topologies: {mc['topologies']['violations']} violations over "
-            f"{mc['topologies']['states_total']} states. Mutants caught, out of 512 topologies each: "
-            + ", ".join(f"{k} {v}" for k, v in mc["mutant_catch_over_512_topologies"].items())
-            + f". Bend agrees with core.py: {mc['bend_agrees_with_core']}.\n"]
-
-if q := load("qif.json"):
-    out += ["## Leak counting (16 secret worlds, every attack of up to 3 offloads)\n",
-            "A trace holds when, per scope, the attacker's observations split the secret worlds into at most "
-            "2^(bits charged) classes.\n",
-            table(["variant", "traces", "hr", "acme", "sealed", "total", "max hr classes", "Bend = core"],
-                  [[x["variant"], x["traces"], x["A_hr"], x["B_acme"], x["S_sealed"], x["T_total"],
-                    x["max_hr_classes"], x["bend_matches"]] for x in q]), ""]
-
-if c := load("cache.json"):
-    out += ["## Shared prompt cache (8 secret worlds, every attack of up to 4 jobs)\n",
-            "A trace holds when the reply times of public jobs are the same in every secret world.\n",
-            table(["variant", "traces", "violating", "noninterference", "max classes", "Bend = core"],
-                  [[x["variant"], x["traces"], x["violating"], x["first_violation"], x["max_classes"], x["bend_matches"]]
-                   for x in c]), ""]
-
 if lean := load("lean.txt"):
     axioms = [l.strip() for l in lean.splitlines() if "depends on axioms" in l]
     out += ["## Unbounded proof (Lean 4, `verify/Lego.lean`)\n",
