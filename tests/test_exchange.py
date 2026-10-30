@@ -554,6 +554,36 @@ def test_thirteenth_hunt_stays_fixed():
             j.join()
 
 
+def test_fifteenth_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/staff.csv").write_text("name,phone\nJosé Núñez,415-555-0134\nWill Okonkwo,415-555-2222\n")
+        (t / "hr/page.html").write_text("<p>Jos&eacute; N&uacute;&ntilde;ez</p>\n")
+        (t / "hr/log.txt").write_text("GET /p?user=Jos%C3%A9%20N%C3%BA%C3%B1ez\n")
+        (t / "hr/calls.md").write_text("Ping https://wa.me/14155550134 tonight.\n")
+        (t / "sealed.txt").write_text("x")
+        os.symlink(t / "sealed.txt", t / "keys/out.env")
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2").mkdir()
+        for f in ("page.html", "log.txt"):                                     # encoded names: refused, not sent
+            assert "encoded" in refusal(cloud, "read", path=str(t / f"hr/{f}")), f
+        assert "0134" not in cloud.read(str(t / "hr/calls.md"))["text"]        # with its country code
+        os.symlink(f"{t}/keys/./out.env", t / "ws2/dot")
+        assert "plain paths" in refusal(cloud, "read", path="dot")             # decided from the name
+        ns = {"os": os}                                                       # the node's runner skips links
+        exec(next(x + y for x, y in zip(transport.RUNNER.splitlines(), transport.RUNNER.splitlines()[1:] + [""])
+                  if x.startswith("walk =")), ns)
+        assert ns["walk"](str(t / "keys/out.env")) == [] and str(t / "keys/out.env") not in ns["walk"](str(t / "keys"))
+        pop.read(str(t / "hr/staff.csv"))
+        GOT.clear()
+        pop.offload("Will asked for leave. May covers. frank agrees.", [], node="cloud")
+        assert not re.search(r"Will|May|frank", GOT[-1][1]), GOT[-1][1]        # first names, any case
+        for j in pop.jobs + cloud.jobs:
+            j.join()
+
+
 def tmp_out():
     return tempfile.mkdtemp() + "/out.txt"
 
@@ -562,6 +592,6 @@ if __name__ == "__main__":
     for f in (test_levels, test_forward_cloud_in_front, test_reverse_local_in_front, test_found_leaks_stay_fixed,
               test_second_hunt_stays_fixed, test_third_hunt_stays_fixed, test_fourth_hunt_stays_fixed,
               test_fifth_hunt_stays_fixed, test_sixth_hunt_stays_fixed, test_seventh_hunt_stays_fixed,
-              test_eighth_hunt_stays_fixed, test_ninth_hunt_stays_fixed, test_tenth_hunt_stays_fixed, test_eleventh_hunt_stays_fixed, test_twelfth_hunt_stays_fixed, test_thirteenth_hunt_stays_fixed):
+              test_eighth_hunt_stays_fixed, test_ninth_hunt_stays_fixed, test_tenth_hunt_stays_fixed, test_eleventh_hunt_stays_fixed, test_twelfth_hunt_stays_fixed, test_thirteenth_hunt_stays_fixed, test_fifteenth_hunt_stays_fixed):
         f()
         print("ok  ", f.__name__)

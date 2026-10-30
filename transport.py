@@ -16,7 +16,8 @@ import json, signal, sys, time, urllib.request
 job = json.loads(sys.stdin.read())
 signal.setitimer(signal.ITIMER_REAL, job["timeout"])     # the whole job, not each read: SIGALRM ends it
 import os
-walk = lambda p: sorted(os.path.join(r, f) for r, _, fs in os.walk(p) for f in fs) if os.path.isdir(p) else [p]
+walk = lambda p: [] if os.path.islink(p) else sorted(f for r, _, fs in os.walk(p) for f in [os.path.join(r, x) for x in fs]
+                                                     if not os.path.islink(f)) if os.path.isdir(p) else [p]   # links: skipped
 docs = "".join("\n--- %s ---\n%s" % (f, open(f, errors="replace").read()) for p in job["files"] for f in walk(p))
 body = {"model": job["model"]["model"], "messages": [
     {"role": "system", "content": "You work for the owner of these files. Answer the task from the files only."},
@@ -150,7 +151,8 @@ def run_anthropic(node, files, task, schema, out_path, keep, timeout):
     import time
     import urllib.request
     import route
-    walk = lambda p: sorted(os.path.join(r, f) for r, _, fs in os.walk(p) for f in fs) if os.path.isdir(p) else [p]  # noqa: E731
+    walk = lambda p: [] if os.path.islink(p) else sorted(  # noqa: E731
+        f for r, _, fs in os.walk(p) for f in [os.path.join(r, x) for x in fs] if not os.path.islink(f)) if os.path.isdir(p) else [p]
     docs = "".join(f"\n--- {f.rsplit('/', 1)[-1].split('-', 1)[-1]} ---\n" + open(f, errors="replace").read()
                    for p in files for f in walk(p))
     sys = "Answer the task from the files only."

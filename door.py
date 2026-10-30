@@ -276,12 +276,16 @@ class Door:
         cur, rest, hops = "/", [p for p in path.split("/") if p], 0
         while rest:                                            # one component, one link hop at a time
             if any(inside(cur, r) for r in roots):
+                if {".", ".."} & set(rest):
+                    raise core.Refused("name files inside a private directory by plain paths, without . or ..")
                 return os.path.join(cur, *rest)
             p = rest.pop(0)
             nxt = os.path.join(cur, p)
             if p == "..":
                 cur = os.path.dirname(cur)
-            elif os.path.islink(nxt) and hops < 40:
+            elif os.path.islink(nxt):
+                if hops == 40:
+                    raise core.Refused("too many links")
                 hops, tgt = hops + 1, os.readlink(nxt)
                 cur, rest = ("/" if tgt.startswith("/") else cur), [q for q in tgt.split("/") if q] + rest
             else:
@@ -324,6 +328,12 @@ class Door:
         text = scrub.text_of(data)
         if text is None:
             raise core.Refused("not a text file, so it cannot be scrubbed")
+        try:
+            return self._scrubbed(item, text, to)
+        except scrub.Unscrubbable:
+            raise core.Refused("this file holds identifiers in an encoded form, so it cannot be scrubbed") from None
+
+    def _scrubbed(self, item, text, to):
         copy = self.mine(item) and self.vault.copy_of(text)    # a private file copied whole: scrubbed as one
         return self.vault.scrub(text, self.tags(item, to), self.fresh if self.mine(item) and not copy else None).encode()
 

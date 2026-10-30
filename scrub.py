@@ -9,8 +9,11 @@ import csv
 import hashlib
 import hmac
 import io
+import html
 import json
+import quopri
 import re
+import urllib.parse
 import secrets
 import unicodedata
 from pathlib import Path
@@ -106,6 +109,21 @@ def fold(s):
                     .lower() + "_")[0] if ch.isalpha() else ch for ch in s)
 
 
+class Unscrubbable(ValueError):
+    """Known identifiers remain once the text is decoded (entities, %XX, \\uXXXX, quoted-printable)."""
+
+
+def decoded(text):
+    """The text with the common machine encodings undone, as a reader would undo them."""
+    t = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), text)
+    t = html.unescape(t)
+    if re.search(r"%[0-9A-Fa-f]{2}", t):
+        t = urllib.parse.unquote(t)
+    if re.search(r"=[0-9A-F]{2}|=\r?\n", t):
+        t = quopri.decodestring(t.encode("utf-8", "replace")).decode("utf-8", "replace")
+    return norm(t)
+
+
 class Vault:
     """One table per scope: a scope's placeholders and matchers come from its own files alone, so the view
     of one scope says nothing about another. A placeholder is a keyed hash of scope, kind and value."""
@@ -161,6 +179,7 @@ class Vault:
             forms = {digits, digits[-10:]} if len(digits) >= 7 else set()   # 4155550134, (415) 555 0134, +1 ...
             if kind == "PHONE" and len(digits) >= 10:
                 forms |= {digits[-7:], digits[-8:]}             # 555-0134, 7946 0958
+                forms |= {cc + digits[-10:] for cc in ("1", "01", "001", "011", "0")}   # 14155550134, wa.me/1...
             tail = re.search(r"\d{4,}$", bare)
             if kind == "ID" and tail:                           # E-10234 called "staff no. 10234" or "E 102 34"
                 forms.add(tail.group(0))
@@ -274,6 +293,9 @@ class Vault:
         keep = set(scopes)                                     # [EMP_10234] in a file is text, not a placeholder
         for scope in sorted(scopes):
             text = self._out(text, lambda seg: self._scrub(seg, scope, keep), keep)
+        plain = decoded(text)                                  # Jos&eacute;, Jos%C3%A9, Quellw=\nater: refused
+        if plain != text and any(self._out(plain, lambda seg: self._scrub(seg, s, keep), keep) != plain for s in scopes):
+            raise Unscrubbable()
         return text
 
     def _out(self, text, f, keep):
@@ -341,7 +363,8 @@ class Vault:
                                                 lambda m: tok("NAME", m.group(0)), seg))
         text = outside(text, lambda seg: re.sub(r"(\0?)((?<![\w'])[\w'-]*[A-Z][\w'-]*)", lambda m: m.group(2) if m.group(1)
                                                 and m.group(2).lower() in STARTERS else tok("NAME", m.group(2)), seg))
-        return outside(text, lambda seg: re.sub(r"[^\W\d_]+", lambda m: m.group(0) if word(m.group(0))   # zorbina, mei, 王伟
+        return outside(text, lambda seg: re.sub(r"[^\W\d_]+", lambda m: m.group(0) if word(m.group(0)) and not (
+            m.group(0).lower() in FIRST)   # zorbina, mei, 王伟; frank, grace (any case)
                                                 else tok("NAME", m.group(0)), seg).replace("\0", ""))
 
     def scrub_name(self, name, scopes, fresh=None):
@@ -349,7 +372,10 @@ class Vault:
         `[PERSON_1]_[PERSON_1]-review.md`."""
         if fresh is not None:                                  # a name the caller wrote: like its text
             return self.scrub(name, scopes, fresh)
-        name = self.scrub(name, scopes)
+        try:
+            name = self.scrub(name, scopes)
+        except Unscrubbable:                                   # an encoded name: no name at all
+            return "#" + hmac.new(bytes.fromhex(self.v["key"]), name.encode(), "sha256").hexdigest()[:8]
         for scope in sorted(scopes):
             ids, forms = self._pattern(scope)[:2]
             lower = {k.lower(): t for k, t in forms.items()}
@@ -403,10 +429,17 @@ which who whom whose when where why how if then else so but and or nor not no ye
 first second third last finally note see use using write read summarise summarize compute count list find check tell
 give make put take get keep send save add remove create update show return answer explain describe compare rank sort
 group total sum average calculate draft edit review fix ask call reply open close run start stop do don't is are was
-were be been has have had can could will would should may might must shall all each every any some most many few
+were be been has have had can could would should might must shall all each every any some most many few
 none both either neither more less after before during while since until because although though however therefore
 thus otherwise instead for from in on at by with without about into onto over under between among per as to of
 thanks thank hi hello dear regards best ok okay done good great yes sure result results summary total name names""".split())
+
+
+try:                                                            # first names, from a fixed list: never the vault
+    FIRST = {w.strip().lower() for w in open("/usr/share/dict/propernames")} - {
+        "will", "mark", "art", "bill", "guy", "ray", "joy", "hope", "case", "page", "lane", "rich", "sky", "major"}
+except OSError:
+    FIRST = set()
 
 
 def word(w):
