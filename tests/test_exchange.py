@@ -325,7 +325,7 @@ def test_eighth_hunt_stays_fixed():
         sent = GOT[-1][1]
         assert not leaked(sent) and "Alice Smith" not in sent, sent         # known and unknown look alike,
         assert not set(re.findall(r"\[[A-Z]+_\w+\]", sent)) & set(re.findall(r"\[[A-Z]+_\w+\]", view))   # unlinked
-        assert "Summer2024!" in sent and "Winter2023!" in sent             # keys: the cloud sees nothing, so no
+        assert ("Summer2024!" in sent) == ("Winter2023!" in sent)          # keys: alike, known or not, so no
         cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")   # replacing to confirm a guess
         (t / "ws2").mkdir()
         text = cloud.read(str(t / "hr/notes.md"))["text"]
@@ -378,6 +378,44 @@ def test_ninth_hunt_stays_fixed():
     assert view("Pellamy Hall") == view("Orrin Vex")                         # what keys holds does not show in hr
 
 
+def shape(text):
+    """Placeholders renamed by first appearance: two views compared up to the vault's own key."""
+    names = {}
+    return re.sub(r"\[[A-Z]+_[0-9a-f]+\]", lambda m: names.setdefault(m.group(0), f"<{len(names)}>"), text)
+
+
+def test_tenth_hunt_stays_fixed():
+    def view(keys_rows, keys_first):
+        with tempfile.TemporaryDirectory() as tmp:
+            t, p = setup(os.path.realpath(tmp))
+            if keys_first:
+                p["scopes"] = dict(reversed(list(p["scopes"].items())))     # keys learned first
+            (t / "keys/owners.csv").write_text("owner,address,account id,email\n" + keys_rows)
+            (t / "hr/ids.csv").write_text("name,address,employee id,email,dob,phone\n"
+                                          "Quillon Brimstoke,41 Larkspur Mews,E-10234,qb@corp.example,1985-03-14,415-555-0134\n")
+            (t / "hr/notes.md").write_text("Quillon came in. Visit at Larkspur Mews. Staff no. 10234. Born 14th of "
+                                           "March 1985, call 415,555,0134 or E 102 34. Mail qb@corp.example.\n")
+            d = door.Door(p, t / "state", "cloud")
+            d.prepare(lambda scope: lambda text: [])
+            out = shape(d.read(str(t / "hr/ids.csv"))["text"] + d.read(str(t / "hr/notes.md"))["text"])
+            assert not leaked(out) and not re.search(r"Quillon|Larkspur|10234|1985|0134|102 34|qb@", out), out
+            pop = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "pop")
+            (t / "ws2").mkdir()
+            tok = re.findall(r"\[EMAIL_[0-9a-f]+\]", d.read(str(t / "hr/notes.md"))["text"])[0]
+            assert pop.vault.unscrub(tok, {"hr"}) == "qb@corp.example"       # hr's own, whatever keys holds
+            fresh = {}
+            relay = shape(pop.vault.scrub("Is it zorbina, Quillon, 14th of March 1985, 4155550134, E 102 34?", {"hr"}, fresh))
+            os.symlink(t / "keys/clients", t / "ws/link")            # a link into keys, which the cloud sees nothing of
+            for j in d.jobs:
+                j.join()
+            return out, relay, json.loads(refusal(d, "offload", task="x", inputs=["link"])).get("row")
+    base = view("Orrin Vex,9 Quarry Lane,AC-77821,ov@corp.example\n", False)
+    assert "Quillon" not in base[1] and "zorbina" not in base[1] and "1985" not in base[1], base[1]   # by text alone
+    for rows in ("Quillon Strand,9 Larkspur Mews,AC-10234,qb@corp.example\n",):
+        for first in (False, True):
+            assert view(rows, first) == base, (rows, first)        # the hr view, the relay, the link: keys unseen
+
+
 def tmp_out():
     return tempfile.mkdtemp() + "/out.txt"
 
@@ -386,6 +424,6 @@ if __name__ == "__main__":
     for f in (test_levels, test_forward_cloud_in_front, test_reverse_local_in_front, test_found_leaks_stay_fixed,
               test_second_hunt_stays_fixed, test_third_hunt_stays_fixed, test_fourth_hunt_stays_fixed,
               test_fifth_hunt_stays_fixed, test_sixth_hunt_stays_fixed, test_seventh_hunt_stays_fixed,
-              test_eighth_hunt_stays_fixed, test_ninth_hunt_stays_fixed):
+              test_eighth_hunt_stays_fixed, test_ninth_hunt_stays_fixed, test_tenth_hunt_stays_fixed):
         f()
         print("ok  ", f.__name__)

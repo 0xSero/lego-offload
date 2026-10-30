@@ -65,7 +65,7 @@ COMMON = set("will mark may june april august grace hope faith joy rose pat bill
              "major price love case cash ward stone field park banks miles holly ivy jack sky".split())
 MONTHS = "january february march april may june july august september october november december".split()
 TOKEN = re.compile(r"\[([A-Z]+)_([0-9a-f]+)\]")
-SEP = r"\s{0,2}[().\-/_]{0,2}\s{0,2}"                                         # between the digits of a written number
+SEP = r"\s{0,2}[().\-/_,]{0,2}\s{0,2}"                                         # between the digits of a written number
 CF = dict.fromkeys(c for c in range(0x10000) if unicodedata.category(chr(c)) == "Cf")
 MARKS = {**dict.fromkeys(map(ord, "\u2018\u2019\u02bc\uff07\u0060\u00b4"), "'"),        # O’Brien is O'Brien
          **dict.fromkeys(range(0x2010, 0x2016), "-")}
@@ -105,82 +105,85 @@ def fold(s):
 
 
 class Vault:
+    """One table per scope: a scope's placeholders and matchers come from its own files alone, so the view
+    of one scope says nothing about another. A placeholder is a keyed hash of scope, kind and value."""
     def __init__(self, path):
         self.path = Path(path)
         self.v = json.loads(self.path.read_text()) if self.path.exists() else {}
-        if "key" not in self.v:                                 # an old vault numbered its placeholders: relearn
+        if "by" not in self.v:                                  # an older, shared-table vault: relearn
             self.v = {}
-        self.dirty = False
-        for k in ("ids", "parts", "real", "scope", "files", "digits"):
+        for k in ("real", "scope", "files", "by"):
             self.v.setdefault(k, {})
-        self.v.setdefault("key", secrets.token_hex(16))         # placeholder tags: nothing about other scopes
-        self._re = None
+        self.v.setdefault("key", secrets.token_hex(16))
+        self.dirty, self._re = False, {}
 
     def save(self):
         self.path.write_text(json.dumps(self.v))
-        self._re, self.dirty = None, False
+        self._re, self.dirty = {}, False
 
-    def _new(self, real, kind, scopes):
-        mac = hmac.new(bytes.fromhex(self.v["key"]), f"{kind}|{real}".encode(), "sha256").hexdigest()
-        token = next(t for n in range(4, 65) for t in [f"[{kind}_{mac[:n]}]"] if t not in self.v["real"])
-        self.v["real"][token], self.v["scope"][token] = real, sorted(scopes)
-        self._re, self.dirty = None, True
+    def _t(self, scope):
+        return self.v["by"].setdefault(scope, {"ids": {}, "parts": {}, "digits": {}})
+
+    def _new(self, real, kind, scope):
+        mac = hmac.new(bytes.fromhex(self.v["key"]), f"{scope}|{kind}|{real}".encode(), "sha256").hexdigest()
+        token = next(t for n in range(10, 65) for t in [f"[{kind}_{mac[:n]}]"]   # fixed length: a clash (2^-40) would
+                     if self.v["real"].get(t, real) == real and self.v["scope"].get(t, scope) == scope)  # show, so none
+        self.v["real"][token], self.v["scope"][token] = real, scope
+        self._re, self.dirty = {}, True
         return token
 
-    def _tag(self, token, scopes):
-        if not set(scopes) <= set(self.v["scope"].get(token, [])):
-            self.v["scope"][token] = sorted(set(self.v["scope"].get(token, [])) | set(scopes))
-            self._re, self.dirty = None, True                  # the matchers of those scopes now include it
+    def _put(self, table, key, token):
+        if key not in table:
+            table[key] = token
+            self._re, self.dirty = {}, True
 
     def add(self, value, kind, scopes):
+        for scope in scopes:
+            self._add(value, kind, scope)
+
+    def _add(self, value, kind, scope):
         value = flat(norm(value)).strip(".'\"")
         check = PATTERNS.get(kind, (None, None))[1]
         if len(value) < 2 or TOKEN.fullmatch(value) or (check and not check(value)) \
                 or (kind == "ID" and value.isdigit() and len(value) < 5):   # short numbers are not identifiers
             return
+        t = self._t(scope)
         whole = kind != "PERSON" or " " in value                       # one-word names live in "parts"
         if whole:
-            token = self.v["ids"].get(value.lower()) or self._new(value, kind, scopes)
-            self.v["ids"][value.lower()] = token
-            self._tag(token, scopes)
+            token = t["ids"].get(value.lower()) or self._new(value, kind, scope)
+            self._put(t["ids"], value.lower(), token)
             bare = re.sub(r"[\W_]+", "", value).lower()          # E-10234 written E10234
             if kind in ("ID", "ADDRESS", "IBAN", "CARD") and bare != value.lower() and len(bare) >= 4 and not bare.isdigit():
-                self._tag(self.v["ids"].setdefault(bare, token), scopes)
-            tail = re.search(r"\d{4,}$", bare)
-            if kind == "ID" and tail and tail.group(0) != bare:   # E-10234 called "staff no. 10234"
-                self._tag(self.v["ids"].setdefault(tail.group(0), token), scopes)
+                self._put(t["ids"], bare, token)
             digits = re.sub(r"\D", "", value)
-            forms = {digits, digits[-10:]}                      # 4155550134, (415) 555 0134, +1 ...
+            forms = {digits, digits[-10:]} if len(digits) >= 7 else set()   # 4155550134, (415) 555 0134, +1 ...
+            tail = re.search(r"\d{4,}$", bare)
+            if kind == "ID" and tail:                           # E-10234 called "staff no. 10234" or "E 102 34"
+                forms.add(tail.group(0))
             ymd = re.fullmatch(r"(\d{4})\D(\d{1,2})\D(\d{1,2})|(\d{1,2})\D(\d{1,2})\D(\d{4})", value)
-            if kind == "DOB" and ymd:                           # 1985-03-14 = 14/03/1985 = 03.14.1985
+            if kind == "DOB" and ymd:                           # 1985-03-14 = 14/03/1985 = 03.14.1985 = 14/3/85
                 y, a, b = ymd.group(1, 2, 3) if ymd.group(1) else (ymd.group(6), ymd.group(4), ymd.group(5))
                 forms = {f for a, b in {(a.zfill(2), b.zfill(2)), (str(int(a)), str(int(b)))} for f in (
-                    y + a + b, a + b + y, b + a + y, a + b + y[2:], b + a + y[2:])}   # 14/03/85 too
-                if ymd.group(1) and 1 <= int(a) <= 12:          # March 14, 1985 / 14 Mar 1985
-                    for mon in (MONTHS[int(a) - 1], MONTHS[int(a) - 1][:3]):
-                        for w in (f"{mon} {int(b)}, {y}", f"{mon} {int(b)} {y}", f"{int(b)} {mon} {y}", f"{int(b)} {mon}, {y}"):
-                            self._tag(self.v["ids"].setdefault(w.lower(), token), scopes)
-            if kind in ("PHONE", "SSN", "CARD", "IBAN", "ID", "DOB") and len(digits) >= 7:
+                    y + a + b, a + b + y, b + a + y, a + b + y[2:], b + a + y[2:])}
+            if kind in ("PHONE", "SSN", "CARD", "IBAN", "ID", "DOB"):
                 for d in forms:
-                    self._tag(self.v["digits"].setdefault(d, token), scopes)
+                    self._put(t["digits"], d, token)
         if kind == "ADDRESS":                                          # "41 Larkspur Mews" and "Oakhollow" too
             for part in re.split(r"\s*,\s*", value):
                 for p in (part, re.sub(r"^\d{1,5}[A-Za-z]?,?\s+", "", part)):   # "Larkspur Mews" too
                     if len(p) >= 3 and not p.isdigit():
-                        self._tag(self.v["ids"].setdefault(p.lower(), token), scopes)
+                        self._put(t["ids"], p.lower(), token)
         if kind == "PERSON":                                           # "Alice" or "Nguyen" alone name her too
             for part in {p for sep in (r"[\s,]+", r"[\s,-]+") for p in re.split(sep, value)}:
                 part = part.strip(".'\"")
                 part = part[:1].upper() + part[1:] if part.islower() else part
                 if len(part) < 2 or part == value and whole:
                     continue
-                have = self.v["parts"].get(part)
+                have = t["parts"].get(part)
                 if have is None:
-                    self.v["parts"][part] = token if whole else self._new(part, kind, scopes)
-                elif whole and have != token and self.v["real"].get(have) != part:   # two people share it: its own
-                    self.v["parts"][part] = self._new(part, kind, set(scopes) | set(self.v["scope"].get(have, [])))  # token,
-                                                                   # matched in every scope that matched it before
-                self._tag(self.v["parts"][part], scopes)
+                    self._put(t["parts"], part, token if whole else self._new(part, kind, scope))
+                elif whole and have != token and self.v["real"].get(have) != part:   # two people of this scope
+                    t["parts"][part] = self._new(part, kind, scope)                  # share it: its own token
 
     def find_in(self, text, scopes):
         for kind, (p, check) in PATTERNS.items():
@@ -219,108 +222,158 @@ class Vault:
         text = norm(text_of(data) or "")
         return self.v["files"].get(name) == hashlib.sha256(text.encode()).hexdigest()
 
-    def _pattern(self, scopes):
-        """Matchers for the identifiers of `scopes` only: whole ids, name forms, and folded name parts."""
-        key = frozenset(scopes)
-        if self._re is None:
-            self._re = {}
-        if key not in self._re:
-            mine = lambda t: set(self.v["scope"].get(t, [])) & key  # noqa: E731
+    def _pattern(self, scope):
+        """Matchers for one scope, from its own table: whole ids, name forms, folded name parts, numbers."""
+        if scope not in self._re:
+            t = self._t(scope)
             alt = lambda keys: "|".join(re.sub(r"(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])", r"[\\s_.\\-]*",   # E 10234
                                                re.escape(k).replace(r"\ ", r"[\s_.\-]*"))   # frank_brown, FrankBrown
                                         for k in sorted(keys, key=len, reverse=True))  # noqa: E731
-            ids = {k: t for k, t in self.v["ids"].items() if mine(t)}
-            joined = {re.sub(r"[\s_.\-]+", "", k): t for k, t in ids.items()}   # how a match is looked up
+            joined = {re.sub(r"[\s_.\-]+", "", k): tok for k, tok in t["ids"].items()}   # how a match is looked up
             forms, folded = {}, {}
-            for p, t in self.v["parts"].items():
-                if mine(t):
-                    for q in {p, p.replace("'", "")}:          # O'Brien, OBrien
-                        for f in {q, q.upper(), q.title()} | ({q.lower()} if q.lower() not in COMMON else set()):
-                            forms.setdefault(f, t)
-                    if len(p) >= 4 and p.lower() not in COMMON:
-                        folded.setdefault(fold(p), t)
+            for p, tok in t["parts"].items():
+                for q in {p, p.replace("'", "")}:              # O'Brien, OBrien
+                    for f in {q, q.upper(), q.title()} | ({q.lower()} if q.lower() not in COMMON else set()):
+                        forms.setdefault(f, tok)
+                if len(p) >= 4 and p.lower() not in COMMON:
+                    folded.setdefault(fold(p), tok)
             b, e = r"(?<![A-Za-z0-9])", r"(s?)(?![A-Za-z0-9])"     # '_' and '.' separate words; plurals too
-            digits = {d: t for d, t in self.v["digits"].items() if mine(t)}
-            short = {fold(p): t for p, t in self.v["parts"].items() if mine(t) and len(p) < 4 and p.lower() not in COMMON}
-            self._re[key] = (joined, forms, [re.compile(b + "(" + alt(ks) + ")" + e, fl) if ks else None for ks, fl in
-                                          ((ids, re.I), (forms, 0))],
-                             folded, re.compile("|".join(map(re.escape, sorted(folded, key=len, reverse=True)))) if folded else None,
-                             (digits, re.compile(r"(?<!\d)(?:" + "|".join(SEP.join(d) for d in sorted(digits, key=len, reverse=True))
-                                                 + r")(?!\d)") if digits else None), short)
-        return self._re[key]
+            digits = t["digits"]
+            short = {fold(p): tok for p, tok in t["parts"].items() if len(p) < 4 and p.lower() not in COMMON}
+            self._re[scope] = (joined, forms, [re.compile(b + "(" + alt(ks) + ")" + e, fl) if ks else None for ks, fl in
+                                               ((t["ids"], re.I), (forms, 0))],
+                               folded, re.compile("|".join(map(re.escape, sorted(folded, key=len, reverse=True)))) if folded else None,
+                               (digits, re.compile(r"(?<!\d)(?:" + "|".join(SEP.join(d) for d in sorted(digits, key=len, reverse=True))
+                                                   + r")(?!\d)") if digits else None), short)
+        return self._re[scope]
 
     def scrub(self, text, scopes, fresh=None):
-        """The text with every known identifier of `scopes` replaced, and only those. Identifiers the
-        files did not hold are found by pattern and learned on the spot, tagged with the scopes of the text.
-
-        `fresh` is for text the caller wrote, which a lower model may have asked it to relay: then every
-        identifier-looking span, known or not (patterns, "Two Capitalised" words), gets a placeholder of
-        its own, kept in `fresh` and never the vault's, so the reader learns neither which of its guesses
-        the vault holds nor which row they are. Nothing is learned from such text."""
-        text, scopes = norm(text), set(scopes)
-        if not scopes:
-            return text
-        if fresh is None:
-            self.find_in(text, scopes)
+        """The text with every known identifier of `scopes` replaced, each scope by its own table.
+        Identifiers the files did not hold are found by pattern and learned on the spot.
+        `fresh`: text the caller wrote. See own()."""
+        text = norm(text)
+        if fresh is not None:
+            return self.own(text, fresh) if scopes else text
+        self.find_in(text, scopes)
         if self.dirty:
             self.save()
-        ids, forms, res, folded, inner, (digits, numbers), short = self._pattern(scopes)
+        for scope in sorted(scopes):
+            text = outside(text, lambda seg: self._scrub(seg, scope))
+        return text
 
-        def tok(token, raw):
-            if fresh is None:
-                return token
-            kind = token[1:].split("_")[0]
-            key = f"{kind}|{fold(flat(raw))}"
-            if key not in fresh:
-                fresh[key] = f"[{kind}_{secrets.token_hex(4)}]"
-                fresh[fresh[key]] = raw
-            return fresh[key]
+    def _scrub(self, text, scope):
+        ids, forms, res, folded, inner, (digits, numbers), short = self._pattern(scope)
+        def sub(r, look):
+            return outside(text, lambda seg: r.sub(lambda m: (look[re.sub(r"[\s_.\-]+", "", m.group(1).lower())]
+                                                              if look is ids else look[m.group(1)]) + m.group(2), seg))
+        if res[0]:                                             # whole values first: E-10234 before its 10234
+            text = sub(res[0], ids)
+        if digits:                                             # dates written out: the DOB's digits
+            text = outside(text, lambda seg: DATE.sub(lambda m: next((digits[d] for d in date_digits(m) if d in digits),
+                                                                     m.group(0)), seg))
         if numbers:                                            # numbers however they are written
-            text = numbers.sub(lambda m: tok(digits[re.sub(r"\D", "", m.group(0))], m.group(0)), text)
-        for look, r in zip((ids, forms), res):
-            if r:
-                text = r.sub(lambda m: tok(look[re.sub(r"[\s_.\-]+", "", m.group(1).lower())] if look is ids
-                                           else look[m.group(1)], m.group(1)) + m.group(2), text)
-        if fresh is not None:                                  # known or not, they look the same
-            for kind, (p, check) in PATTERNS.items():
-                text = re.sub(p, lambda m: m.group(0) if TOKEN.fullmatch(m.group(0)) or check and not check(
-                    m.group(1) if m.lastindex else m.group(0)) else tok(f"[{kind}_]", m.group(0)), text)
-            text = re.sub(r"(?<![\w\[])[A-Z][a-z'-]+(?:[ \t]+[A-Z][a-z'-]+)+(?![\w\]])", lambda m: tok("[PERSON_]", m.group(0)), text)
+            text = outside(text, lambda seg: numbers.sub(lambda m: digits[re.sub(r"\D", "", m.group(0))], seg))
+        if res[1]:
+            text = sub(res[1], forms)
         if not inner and not short:
             return text
 
         def hump(w):                                           # MeiNg: short names as whole humps
             if short.get(fold(w)):
-                return tok(short[fold(w)], w)
-            return inner.sub(lambda h: tok(folded[h.group(0)], h.group(0)), fold(w)) if inner and inner.search(fold(w)) else w
+                return short[fold(w)]
+            return inner.sub(lambda h: folded[h.group(0)], fold(w)) if inner and inner.search(fold(w)) else w
 
         def run(m):                                            # zorbinaQuellwater2, quillonbrimstoke, Jose for José,
             w = m.group(0)                                     # zOrBiNa
             if inner and inner.search(fold(w)):
-                return inner.sub(lambda h: tok(folded[h.group(0)], h.group(0)), fold(w))
+                return inner.sub(lambda h: folded[h.group(0)], fold(w))
             return "".join(hump(w) for w in re.split(r"(?<=[a-z])(?=[A-Z])", w))
-        return re.sub(r"\[[A-Z]+_[0-9a-f]+\]|[^\W\d_]+", lambda m: m.group(0) if m.group(0)[0] == "[" else run(m), text)
+        return outside(text, lambda seg: re.sub(r"[^\W\d_]+", run, seg))
+
+    def own(self, text, fresh):
+        """Text the caller wrote, which a lower model may have asked it to relay: replaced by rules that
+        look at the text only, never at the vault, so what is replaced tells the reader nothing about
+        what the vault holds. Patterns, dates, runs of capitalised words, and capitalised words that are
+        not everyday words each get a placeholder of their own, kept in `fresh` for the way back."""
+        def tok(kind, raw):
+            key = f"{kind}|{fold(flat(raw))}"
+            if key not in fresh:
+                fresh[key] = f"[{kind}_{secrets.token_hex(4)}]"
+                fresh[fresh[key]] = raw
+            return fresh[key]
+        for kind, (p, check) in PATTERNS.items():
+            text = outside(text, lambda seg: re.sub(p, lambda m: m.group(0) if check and not check(
+                m.group(1) if m.lastindex else m.group(0)) else tok(kind, m.group(0)), seg))
+        text = outside(text, lambda seg: DATE.sub(lambda m: tok("DATE", m.group(0)), seg))
+        text = outside(text, lambda seg: re.sub(r"(?<![\w])\d(?:[\s().\-/_,]{0,3}\d){3,}(?![\w])",   # 4+ digits, any way
+                                                lambda m: tok("NUM", m.group(0)), seg))
+        text = outside(text, lambda seg: re.sub(r"(?<![\w'])(?:[A-Z][\w'-]*[ \t]+)+[A-Z][\w'-]*(?![\w'])",
+                                                lambda m: tok("NAME", m.group(0)), seg))
+        text = outside(text, lambda seg: re.sub(r"(?<![\w'])[\w'-]*[A-Z][\w'-]*", lambda m: m.group(0) if everyday(
+            m.group(0)) else tok("NAME", m.group(0)), seg))
+        return outside(text, lambda seg: re.sub(r"[^\W\d_]{4,}", lambda m: m.group(0) if word(m.group(0))   # zorbina_letter
+                                                else tok("NAME", m.group(0)), seg))
 
     def scrub_name(self, name, scopes, fresh=None):
-        if fresh is not None:                                  # a name the caller wrote: like its text
-            return self.scrub(name, scopes, fresh)
         """A file name: whole first (emails, numbers), then piece by piece, `alice_nguyen-review.md` ->
         `[PERSON_1]_[PERSON_1]-review.md`."""
+        if fresh is not None:                                  # a name the caller wrote: like its text
+            return self.scrub(name, scopes, fresh)
         name = self.scrub(name, scopes)
-        if not scopes:
-            return name
-        ids, forms = self._pattern(scopes)[:2]
-        lower = {k.lower(): t for k, t in forms.items()}
-        return re.sub(r"(?<!\[)[A-Za-z0-9]+(?![\w]*\])", lambda m: ids.get(m.group(0).lower())
-                      or lower.get(m.group(0).lower()) or m.group(0), name)
+        for scope in sorted(scopes):
+            ids, forms = self._pattern(scope)[:2]
+            lower = {k.lower(): t for k, t in forms.items()}
+            name = re.sub(r"(?<!\[)[A-Za-z0-9]+(?![\w]*\])", lambda m: ids.get(m.group(0).lower())
+                          or lower.get(m.group(0).lower()) or m.group(0), name)
+        return name
 
     def unscrub(self, text, allowed, fresh=None):
-        """Placeholders back to real values, only those whose every scope is in `allowed` (and the
-        caller's own, from `fresh`). Only a placeholder standing alone: 1[PHONE_x] stays as written,
-        so a later scrub cannot miss what it would have become."""
+        """Placeholders back to real values, only those of a scope in `allowed` (and the caller's own,
+        from `fresh`). Only a placeholder standing alone: 1[PHONE_x] stays as written, so a later scrub
+        cannot miss what it would have become."""
         def back(m):
             t = m.group(0)
             if fresh and t in fresh:
                 return fresh[t]
-            return self.v["real"][t] if t in self.v["real"] and set(self.v["scope"].get(t, ["?"])) <= set(allowed) else t
+            return self.v["real"][t] if t in self.v["real"] and self.v["scope"].get(t) in set(allowed) else t
         return re.sub(r"(?<![A-Za-z0-9])" + TOKEN.pattern + r"(?![A-Za-z0-9])", back, text)
+
+
+def outside(text, f):
+    """f applied to the text between placeholders, never inside one."""
+    parts = re.split(r"(" + TOKEN.pattern.replace("(", "(?:") + r")", text)
+    return "".join(p if i % 2 else f(p) for i, p in enumerate(parts))
+
+
+MON = "|".join(m[:3] + "(?:" + m[3:] + ")?" for m in MONTHS) + "|sept"
+DATE = re.compile(r"(?i)\b(?:(\d{1,2})(?:st|nd|rd|th)?(?:\s+of)?[\s.-]+(" + MON + r")\.?,?[\s.-]+(\d{4}|'?\d{2})"
+                  r"|(" + MON + r")\.?[\s.-]+(\d{1,2})(?:st|nd|rd|th)?,?[\s.-]+(\d{4}|'?\d{2}))\b")
+
+
+def date_digits(m):
+    """A written date's digit forms, as the vault keeps a DOB: 14th of March '85 -> 19850314, ..."""
+    d, mon, y = (m.group(1), m.group(2), m.group(3)) if m.group(1) else (m.group(5), m.group(4), m.group(6))
+    mm = next(i + 1 for i, x in enumerate(MONTHS) if x.startswith(mon.lower()[:3]))
+    y = y.lstrip("'")
+    return [yy + f"{mm:02d}" + d.zfill(2) for yy in ([y] if len(y) == 4 else ["19" + y, "20" + y])] + \
+        [f"{mm:02d}" + d.zfill(2) + y[-2:]]
+
+
+try:
+    WORDS = {w.strip() for w in open("/usr/share/dict/words") if w[:1].islower()}
+except OSError:
+    WORDS = set()
+
+
+def word(w):
+    """In the dictionary, as written or inflected (salaries, reviewed, offloading)."""
+    w = w.lower()
+    return w in WORDS or any(w.endswith(a) and w[:-len(a)] + b in WORDS for a, b in (
+        ("s", ""), ("es", ""), ("ies", "y"), ("ed", ""), ("ed", "e"), ("ing", ""), ("ing", "e"), ("ly", ""),
+        ("er", ""), ("ers", ""), ("'s", ""), ("ising", "ize"), ("ise", "ize"), ("ised", "ize")))
+
+
+def everyday(w):
+    """A capitalised word that is also an everyday word (The, Polish, Monday): not taken for a name."""
+    w = w.strip("'-")
+    return not w or (w[1:].islower() or w.isupper()) and w.lower() not in COMMON and (word(w) or w.lower() in ("i", "a"))

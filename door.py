@@ -231,6 +231,11 @@ class Door:
                 raise core.Refused(f"name files in {sorted(named)} by the names listed (read \".\" lists them)")
         if node == self.host:                                  # the agent can plant links in its workspace:
             path = canon(path)                                 # label where the bytes really are, and pin them
+            lab = core.label(f"{node}:{path}", self.public, self.scopes)
+            if not internal and core.SEALED not in lab and not inside(path, self.ws) and \
+                    not core.may_hold(self.me, core.scrubbed(lab)):   # a link into a scope it sees nothing of:
+                self.deferred.add(f"{node}:{path}")            # like naming it, decided before any look at it
+                return core.Item(f"{node}:{path}", lab, node)
             if os.path.exists(path):
                 st = os.stat(path)
                 if inside(path, self.ws) and st.st_nlink > 1 and not os.path.isdir(path):
