@@ -545,11 +545,13 @@ class Door:
                 f"\nYour workspace: {self.ws}. Relative paths mean files there. Anything else is sealed.\n"
                 "Other models: " + ("; ".join(f"{n} (sees " + ", ".join(f"{s}: {self.level(s, self.nodes[n])}"
                                                                        for s in kinds) + ")" for n in others) or "none") +
-                ".\nWhat you read stays in your context: every task you offload carries it, and a model that may not "
-                "see it refuses the task for the rest of this session. Read only what the task needs" +
+                ".\nWhat you read stays in your context: every task you offload from this workspace carries it, now "
+                "and in later sessions, and a model that may not see it refuses the task. Read only what the task needs" +
                 "".join(f"; reading {s} means {', '.join(n for n in others if self.level(s, self.nodes[n]) == 'nothing')} "
                         f"can take no more tasks from you" for s in kinds if self.level(s) != "nothing" and
-                        any(self.level(s, self.nodes[n]) == "nothing" for n in others)) + ".\n"
+                        any(self.level(s, self.nodes[n]) == "nothing" for n in others)) + "." +
+                (f" Your context already holds {', '.join(held)}." if (held := sorted(
+                    {s.rstrip("~") for s in self.context} - {core.SEALED} - {s for s in kinds if self.level(s) == "nothing"})) else "") + "\n"
                 "`offload` gives another model your task text and the `inputs` files, nothing else: write complete "
                 "instructions and list every file (a directory stands for all its files). If you could see all the "
                 "inputs, you get the full result. On inputs you may not see, pass `returns`, one small typed answer "
