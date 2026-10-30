@@ -19,7 +19,8 @@ GOT = []                                                       # (node, what the
 
 
 def fake_job(node, files, task, returns, out, keep, timeout, salt=None):     # the files are staged on this host
-    seen = task + "".join(Path(f).name + Path(f).read_text() for f in files)
+    walk = [x for f in files for x in (sorted(p for p in Path(f).rglob("*") if p.is_file()) if Path(f).is_dir() else [Path(f)])]
+    seen = task + "".join(x.name + x.read_text() for x in walk)
     GOT.append((node["model"]["model"], seen))
     reply = json.dumps({"answer": True}) if returns else "echo: " + seen
     return {"took": 0.0, "output": None if keep else reply}
@@ -311,8 +312,8 @@ def test_eighth_hunt_stays_fixed():
     with tempfile.TemporaryDirectory() as tmp:
         t, p = setup(os.path.realpath(tmp))
         (t / "keys/prod.env").write_text("DB_PASSWORD=Summer2024!\n")
-        (t / "keys/owners.csv").write_text("owner\nPellamy Strand\n")
-        (t / "hr/notes.md").write_text("Pellamy Strand called from 415 - 555 - 0134 about E 10234.\n")
+        (t / "keys/owners.csv").write_text("owner\nPellamy Strand\n")      # a view of hr is hr's alone:
+        (t / "hr/notes.md").write_text("Varnella called from 415 - 555 - 0134 about E 10234. The hallway.\n")
         (t / "hr/ids.csv").write_text("name,phone,employee id\nVarnella Oxtrude,415-555-0134,E-10234\n")
         pop = door.Door(p, t / "state", "pop")
         pop.prepare(lambda scope: lambda text: [])
@@ -328,7 +329,8 @@ def test_eighth_hunt_stays_fixed():
         cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")   # replacing to confirm a guess
         (t / "ws2").mkdir()
         text = cloud.read(str(t / "hr/notes.md"))["text"]
-        assert not leaked(text) and "0134" not in text and "10234" not in text, text   # keys names too, spaced forms
+        assert not leaked(text) and "0134" not in text and "10234" not in text, text   # spaced forms
+        assert "hallway" in text                                              # keys holds no 'hall' to replace
         calls = []
         real = transport.files
         main = threading.current_thread()                                      # the job's own thread may look
@@ -351,6 +353,31 @@ def test_eighth_hunt_stays_fixed():
             j.join()
 
 
+def test_ninth_hunt_stays_fixed():
+    def view(keys_owner):
+        with tempfile.TemporaryDirectory() as tmp:
+            t, p = setup(os.path.realpath(tmp))
+            (t / "keys/owners.csv").write_text(f"owner\n{keys_owner}\n")
+            (t / "hr/handbook.md").write_text("Staff shall use the east hallway. Payroll runs monthly.\n")
+            (t / "hr/ids.csv").write_text("name,dob,employee id\nZorbina Quellwater,1985-03-14,E-10234\n")
+            (t / "hr/contacts.txt").write_bytes("Quillon Brimstoke qb@corp.example\n".encode("utf-16"))
+            d = door.Door(p, t / "state", "cloud")
+            d.prepare(lambda scope: lambda text: [])
+            out = d.read(str(t / "hr/handbook.md"))["text"]
+            text = d.vault.scrub("ZORBINA zOrBiNa born March 14, 1985 or 14/03/85, staff no. 10234", {"hr"})
+            assert not leaked(text) and "1985" not in text and "14/03/85" not in text and "10234" not in text, text
+            assert not leaked(d.read(str(t / "hr/contacts.txt"))["text"])     # UTF-16: read as text, then scrubbed
+            same = refusal(d, "read", path=str(t / "keys/nope"))
+            for probe in ("../keys/prod.env", str(t / "KEYS/prod.env"), str(t / "ws/../keys/prod.env")):
+                assert refusal(d, "read", path=probe) == refusal(d, "read", path=probe.replace("prod.env", "nope")) \
+                    and "sealed" not in refusal(d, "read", path=probe), probe   # decided from the name alone
+            assert "you may not see" in same
+            for j in d.jobs:
+                j.join()
+            return out
+    assert view("Pellamy Hall") == view("Orrin Vex")                         # what keys holds does not show in hr
+
+
 def tmp_out():
     return tempfile.mkdtemp() + "/out.txt"
 
@@ -359,6 +386,6 @@ if __name__ == "__main__":
     for f in (test_levels, test_forward_cloud_in_front, test_reverse_local_in_front, test_found_leaks_stay_fixed,
               test_second_hunt_stays_fixed, test_third_hunt_stays_fixed, test_fourth_hunt_stays_fixed,
               test_fifth_hunt_stays_fixed, test_sixth_hunt_stays_fixed, test_seventh_hunt_stays_fixed,
-              test_eighth_hunt_stays_fixed):
+              test_eighth_hunt_stays_fixed, test_ninth_hunt_stays_fixed):
         f()
         print("ok  ", f.__name__)

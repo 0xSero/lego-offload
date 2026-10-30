@@ -63,6 +63,7 @@ COLUMNS = [("EMAIL", r"e ?mail"), ("PHONE", r"phone|mobile|\btel\b|telefon|cell"
 COMMON = set("will mark may june april august grace hope faith joy rose pat bill rob sue art guy ray dawn summer frank "
              "long young little black white brown green king bell hill wood page lane gray grey rich chase hunter "
              "major price love case cash ward stone field park banks miles holly ivy jack sky".split())
+MONTHS = "january february march april may june july august september october november december".split()
 TOKEN = re.compile(r"\[([A-Z]+)_([0-9a-f]+)\]")
 SEP = r"\s{0,2}[().\-/_]{0,2}\s{0,2}"                                         # between the digits of a written number
 CF = dict.fromkeys(c for c in range(0x10000) if unicodedata.category(chr(c)) == "Cf")
@@ -73,6 +74,24 @@ MARKS = {**dict.fromkeys(map(ord, "\u2018\u2019\u02bc\uff07\u0060\u00b4"), "'"),
 def norm(s):
     """NFKC, invisible format characters removed, a hyphen at a line break joined."""
     return re.sub(r"-\n\s*", "", unicodedata.normalize("NFKC", s).translate(CF).translate(MARKS))
+
+
+def text_of(data):
+    """Bytes as text: UTF-8, or UTF-16/32 by their mark or their zero bytes. None when it is not text
+    (a binary file cannot be scrubbed, so it never goes out scrubbed)."""
+    if isinstance(data, str):
+        return data
+    for bom, enc in ((b"\xef\xbb\xbf", "utf-8-sig"), (b"\xff\xfe\x00\x00", "utf-32"), (b"\x00\x00\xfe\xff", "utf-32"),
+                     (b"\xff\xfe", "utf-16"), (b"\xfe\xff", "utf-16")):
+        if data.startswith(bom):
+            break
+    else:
+        enc = "utf-16-le" if data[1:200:2].count(0) > 40 else "utf-16-be" if data[:200:2].count(0) > 40 else "utf-8"
+    try:
+        text = data.decode(enc)
+    except UnicodeDecodeError:
+        return None
+    return None if re.search(r"[\x00-\x08\x0e-\x1f]", text) else text
 
 
 def flat(s):
@@ -127,12 +146,20 @@ class Vault:
             bare = re.sub(r"[\W_]+", "", value).lower()          # E-10234 written E10234
             if kind in ("ID", "ADDRESS", "IBAN", "CARD") and bare != value.lower() and len(bare) >= 4 and not bare.isdigit():
                 self._tag(self.v["ids"].setdefault(bare, token), scopes)
+            tail = re.search(r"\d{4,}$", bare)
+            if kind == "ID" and tail and tail.group(0) != bare:   # E-10234 called "staff no. 10234"
+                self._tag(self.v["ids"].setdefault(tail.group(0), token), scopes)
             digits = re.sub(r"\D", "", value)
             forms = {digits, digits[-10:]}                      # 4155550134, (415) 555 0134, +1 ...
             ymd = re.fullmatch(r"(\d{4})\D(\d{1,2})\D(\d{1,2})|(\d{1,2})\D(\d{1,2})\D(\d{4})", value)
             if kind == "DOB" and ymd:                           # 1985-03-14 = 14/03/1985 = 03.14.1985
                 y, a, b = ymd.group(1, 2, 3) if ymd.group(1) else (ymd.group(6), ymd.group(4), ymd.group(5))
-                forms = {f for a, b in {(a.zfill(2), b.zfill(2)), (str(int(a)), str(int(b)))} for f in (y + a + b, a + b + y, b + a + y)}
+                forms = {f for a, b in {(a.zfill(2), b.zfill(2)), (str(int(a)), str(int(b)))} for f in (
+                    y + a + b, a + b + y, b + a + y, a + b + y[2:], b + a + y[2:])}   # 14/03/85 too
+                if ymd.group(1) and 1 <= int(a) <= 12:          # March 14, 1985 / 14 Mar 1985
+                    for mon in (MONTHS[int(a) - 1], MONTHS[int(a) - 1][:3]):
+                        for w in (f"{mon} {int(b)}, {y}", f"{mon} {int(b)} {y}", f"{int(b)} {mon} {y}", f"{int(b)} {mon}, {y}"):
+                            self._tag(self.v["ids"].setdefault(w.lower(), token), scopes)
             if kind in ("PHONE", "SSN", "CARD", "IBAN", "ID", "DOB") and len(digits) >= 7:
                 for d in forms:
                     self._tag(self.v["digits"].setdefault(d, token), scopes)
@@ -164,7 +191,7 @@ class Vault:
         """Record every identifier in one private file: patterns, identifier columns of a table, and what
         `find(text)` (a local model trusted with the file) lists as people, addresses and other ids.
         `also`: more text to search the same way, such as the file's path."""
-        raw = norm(data.decode(errors="replace") if isinstance(data, bytes) else data)
+        raw = norm(text_of(data) or "")
         also = re.sub(r"(?<=[a-z])(?=[A-Z])|[^\w]+|_+", " ", also)          # Varnella-Oxtrude, VarnellaOxtrude
         text = also + "\n" + raw if also else raw
         self.find_in(text, scopes)
@@ -189,7 +216,7 @@ class Vault:
         self.save()
 
     def known(self, name, data):
-        text = norm(data.decode(errors="replace") if isinstance(data, bytes) else data)
+        text = norm(text_of(data) or "")
         return self.v["files"].get(name) == hashlib.sha256(text.encode()).hexdigest()
 
     def _pattern(self, scopes):
@@ -267,8 +294,11 @@ class Vault:
                 return tok(short[fold(w)], w)
             return inner.sub(lambda h: tok(folded[h.group(0)], h.group(0)), fold(w)) if inner and inner.search(fold(w)) else w
 
-        def run(m):                                            # zorbinaQuellwater2, quillonbrimstoke, Jose for José
-            return "".join(hump(w) for w in re.split(r"(?<=[a-z])(?=[A-Z])", m.group(0)))
+        def run(m):                                            # zorbinaQuellwater2, quillonbrimstoke, Jose for José,
+            w = m.group(0)                                     # zOrBiNa
+            if inner and inner.search(fold(w)):
+                return inner.sub(lambda h: tok(folded[h.group(0)], h.group(0)), fold(w))
+            return "".join(hump(w) for w in re.split(r"(?<=[a-z])(?=[A-Z])", w))
         return re.sub(r"\[[A-Z]+_[0-9a-f]+\]|[^\W\d_]+", lambda m: m.group(0) if m.group(0)[0] == "[" else run(m), text)
 
     def scrub_name(self, name, scopes, fresh=None):

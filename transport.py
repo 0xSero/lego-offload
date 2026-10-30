@@ -5,6 +5,7 @@ which policy requires to be trusted with every scope. Jobs run on the node holdi
 inputs and call that node's own model, so private text never crosses the network to it.
 """
 import json
+import os
 import secrets
 import shlex
 import subprocess
@@ -14,7 +15,9 @@ RUNNER = r'''
 import json, signal, sys, time, urllib.request
 job = json.loads(sys.stdin.read())
 signal.setitimer(signal.ITIMER_REAL, job["timeout"])     # the whole job, not each read: SIGALRM ends it
-docs = "".join("\n--- %s ---\n%s" % (p, open(p, errors="replace").read()) for p in job["files"])
+import os
+walk = lambda p: sorted(os.path.join(r, f) for r, _, fs in os.walk(p) for f in fs) if os.path.isdir(p) else [p]
+docs = "".join("\n--- %s ---\n%s" % (f, open(f, errors="replace").read()) for p in job["files"] for f in walk(p))
 body = {"model": job["model"]["model"], "messages": [
     {"role": "system", "content": "You work for the owner of these files. Answer the task from the files only."},
     {"role": "user", "content": job["task"] + "\n" + docs}]}
@@ -60,6 +63,21 @@ def put(node, dst_dir, name, data, timeout=60):
     dst = f"{dst_dir}/{secrets.token_hex(8)}-{name}"
     _sh(node, f"mkdir -p {shlex.quote(dst_dir)} && cat > {shlex.quote(dst)}", data=data, timeout=timeout)
     return dst
+
+
+def put_tree(node, dst_dir, src, timeout=60):
+    """Copy a file or directory from this host into a new folder on a node, in one pipe: the door does
+    the same work however many files it holds. Returns its path on the node."""
+    dst = f"{dst_dir}/{secrets.token_hex(8)}"
+    parent, base = os.path.split(src.rstrip("/"))
+    unpack = f"mkdir -p {shlex.quote(dst)} && tar -C {shlex.quote(dst)} -xf -"
+    sink = f"ssh -o BatchMode=yes -o ConnectTimeout=10 {shlex.quote(node['ssh'])} {shlex.quote(unpack)}" if node.get("ssh") \
+        else "/bin/sh -c " + shlex.quote(unpack)
+    r = subprocess.run(["/bin/sh", "-c", f"tar -C {shlex.quote(parent)} -cf - {shlex.quote(base)} | {sink}"],
+                       capture_output=True, timeout=timeout)
+    if r.returncode:
+        raise RuntimeError("staging failed")
+    return f"{dst}/{base}"
 
 
 def schema_json(s):
@@ -132,7 +150,9 @@ def run_anthropic(node, files, task, schema, out_path, keep, timeout):
     import time
     import urllib.request
     import route
-    docs = "".join(f"\n--- {p.rsplit('/', 1)[-1].split('-', 1)[-1]} ---\n" + open(p, errors="replace").read() for p in files)
+    walk = lambda p: sorted(os.path.join(r, f) for r, _, fs in os.walk(p) for f in fs) if os.path.isdir(p) else [p]  # noqa: E731
+    docs = "".join(f"\n--- {f.rsplit('/', 1)[-1].split('-', 1)[-1]} ---\n" + open(f, errors="replace").read()
+                   for p in files for f in walk(p))
     sys = "Answer the task from the files only."
     if schema:
         sys += " Reply with only a JSON object matching: " + json.dumps(schema_json(schema))
