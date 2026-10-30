@@ -548,7 +548,7 @@ class Door:
                 ".\nWhat you read stays in your context: every task you offload from this workspace carries it, now "
                 "and in later sessions, and a model that may not see it refuses the task. Read only what the task needs" +
                 "".join(f"; reading {s} means {', '.join(n for n in others if self.level(s, self.nodes[n]) == 'nothing')} "
-                        f"can take no more tasks from you" for s in kinds if self.level(s) != "nothing" and
+                        f"can take no more tasks from you, so offload to it first" for s in kinds if self.level(s) != "nothing" and
                         any(self.level(s, self.nodes[n]) == "nothing" for n in others)) + "." +
                 (f" Your context already holds {', '.join(held)}." if (held := sorted(
                     {s.rstrip("~") for s in self.context} - {core.SEALED} - {s for s in kinds if self.level(s) == "nothing"})) else "") + "\n"
