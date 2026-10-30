@@ -199,6 +199,7 @@ class Door:
         self.found = {}                                        # scope dir -> its files, listed before the agent starts
         self.learned = set()                                    # files the catalog found in the vault
         self.deferred = set()                                   # hidden inputs, expanded only inside their job
+        self.snap = {}                                          # files on other machines, as lego found them
         self.staged = {}                                        # (node, from, scope dir) -> its copy there
         self.fresh = {}                                         # the caller's own words -> placeholders, and back
         names = list(policy["nodes"])                           # the queue on each node (core.queue)
@@ -247,6 +248,14 @@ class Door:
         self.log.write(line.ljust(4095) + "\n")
         self.log.flush()
 
+    def listed(self, node, path):
+        """A folder's files. On another machine, as lego found them at the start: nothing crosses now."""
+        if self.p["nodes"][node].get("ssh"):
+            for d, found in self.found.items():
+                if d.partition(":")[0] == node and inside(path, d.partition(":")[2]):
+                    return [f for f in found if inside(f, path)]
+        return transport.files(self.p["nodes"][node], path)
+
     def whole(self, i, s, n):
         """Does input i cross to node n as its whole scope? When it goes raw and is not the caller's to see."""
         return i.ref in self.deferred or not s and i.node != n and i.ref not in self.refs and not core.may_hold(
@@ -265,7 +274,10 @@ class Door:
             if strict and not f:
                 raise core.Refused(f"{self.scopes[d]} is hidden from some model, but no local model sees it raw to find its names")
             for path in self.found.setdefault(d, transport.files(self.p["nodes"][node], root)):
-                self.learn(f"{node}:{path}", transport.read(self.p["nodes"][node], path, 600), self.scopes[d], f)
+                data = transport.read(self.p["nodes"][node], path, 600)
+                self.learn(f"{node}:{path}", data, self.scopes[d], f)
+                if self.p["nodes"][node].get("ssh"):           # on another machine: its scrubbed views are made
+                    self.snap[f"{node}:{path}"] = data         # from this copy, so nothing crosses at request time
         for d in self.scopes:                                  # a listing never walks a scope at request time:
             node, _, root = d.partition(":")                   # its time would show the hidden folders
             self.found.setdefault(d, transport.files(self.p["nodes"][node], root))
@@ -334,7 +346,8 @@ class Door:
                 if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):
                     raise core.Refused(f"{asked} is not a regular file")
                 self.inodes[f"{node}:{path}"] = (st.st_dev, st.st_ino)
-        elif not internal and f"{node}:{path}" not in self.refs:  # on another machine: no link on the way there
+        elif not internal and f"{node}:{path}" not in self.refs and f"{node}:{path}" not in self.snap:   # on another
+                                                               # machine: no link on the way there
             try:
                 transport.kind(self.p["nodes"][node], path)
             except RuntimeError:
@@ -416,7 +429,8 @@ class Door:
             finally:
                 os.close(fd)
         elif data is None:
-            data = transport.read(self.p["nodes"][node], path, timeout)
+            data = self.snap[item.ref] if scrubbed and item.ref in self.snap else transport.read(
+                self.p["nodes"][node], path, timeout)
         if scrubbed and not self.mine(item) and not self.vault.known(item.ref, data):
             raise core.Refused("a private file changed or appeared after lego started: restart lego to learn it")
         if not scrubbed:
@@ -451,7 +465,8 @@ class Door:
         for d, s in self.scopes.items():
             node, _, root = d.partition(":")
             lvl = self.level(s)
-            found = self.found[d] if lvl == "nothing" and d in self.found else transport.files(self.p["nodes"][node], root)
+            found = self.found[d] if (lvl == "nothing" or self.p["nodes"][node].get("ssh")) and d in self.found else \
+                transport.files(self.p["nodes"][node], root)           # another machine: as found at the start
             shown = root if node == self.host else d
             hidden = any(self.level(s, self.nodes[n]) == "nothing" for n, v in self.p["nodes"].items() if runnable(v))
             lines.append(f"  {shown}  [{s}]  you see: {lvl}" + {
@@ -573,7 +588,7 @@ class Door:
                 raise core.Refused(f"name the private directories in {r} one by one")        # one by one, unwalked
             if node == self.host and inside(path, self.ws) and self.kind(path) is None:   # its own files only
                 raise core.Refused(f"no file {r} in your workspace. read \".\" lists what you can name.")
-            found = [] if it.ref in self.refs or core.SEALED in it.scopes else transport.files(self.p["nodes"][node], path)
+            found = [] if it.ref in self.refs or core.SEALED in it.scopes else self.listed(node, path)
             got = [it]
             if found and found != [path]:                      # one swapped for a link meanwhile: dropped, whatever
                 got = []                                       # it points at, and before a look at it

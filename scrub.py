@@ -242,7 +242,7 @@ class Vault:
                 for d in forms:
                     self._put(t["digits"], d, token)
         local = value.split("@")[0].lower() if kind == "EMAIL" else ""
-        if len(local) >= 2 and not word(local) and local not in COMMON:   # jdoe1985 at gmail dot com
+        if len(local) >= 2 and local not in WORDS and local not in COMMON:   # jdoe1985, amiller at gmail dot com
             self._put(t["ids"], local, token)
         if kind == "ADDRESS":                                          # "41 Larkspur Mews" and "Oakhollow" too
             for part in re.split(r"\s*,\s*", value):
@@ -396,13 +396,14 @@ class Vault:
             while i < len(w):
                 toks, n = chain(w[i:])
                 out, i, hit = (out + toks, i + n, True) if n else (out + [w[i]], i + 1, hit)
-            if hit:
-                return "".join(out)
-            for k in (1, 2):                                   # wli, abrown, frankq, jwhill, parkjw: initials
-                if len(w) > k + 1 and w[k:] in glued:          # and a name
-                    return w[:k] + glued[w[k:]]
-                if len(w) > k + 1 and w[:-k] in glued:
-                    return glued[w[:-k]] + w[-k:]
+            return "".join(out) if hit else initials(w)
+
+        def initials(w):                                       # wli, abrown, frankq, jwhill, parkjw, amiller:
+            for k in (1, 2):                                   # one or two initials and a name
+                if len(w) > k + 1 and w[k:] in {**glued, **folded}:
+                    return w[:k] + {**glued, **folded}[w[k:]]
+                if len(w) > k + 1 and w[:-k] in {**glued, **folded}:
+                    return {**glued, **folded}[w[:-k]] + w[-k:]
             return None
 
         def only(r):                                           # dev[P]ops is [P]: letters left around a part
@@ -415,9 +416,11 @@ class Vault:
                     return (short.get(k) or folded[k]) + s
             return None
 
-        def hump(h):                                           # transfer, planned, let: words, whatever they hold
-            return known(h) or (h if word(re.sub("['" + MARK + "]", "", h)) else
-                                only(glue(re.sub("['" + MARK + "]", "", fold(h)))) or only(parts(h)) or h)
+        def hump(h):                                           # transfer, let: words, whatever they hold; an
+            b = re.sub("['" + MARK + "]", "", h)               # inflected one (planned) unless it is a login
+            if known(h) or b.lower() in WORDS:                 # around a known part (amiller, scarter)
+                return known(h) or h
+            return only(initials(fold(b).lower())) or (h if word(b) else only(glue(fold(b))) or only(parts(h)) or h)
 
         def run(m):                                            # MeiNg, TransferMei: hump by hump, the longest
             w = m.group(0)                                     # run of humps that is a known part first

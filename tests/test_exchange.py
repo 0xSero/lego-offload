@@ -1311,6 +1311,41 @@ def test_thirty_second_hunt_stays_fixed():
         assert "park" not in pop.vault.scrub_name("park88-review.md", {"hr"}).lower()
 
 
+def test_thirty_third_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "box/hr").mkdir(parents=True)
+        (t / "box/hr/people.csv").write_text("name,email\nAnna Miller,amiller@corp.example\nSam Carter,sc@corp.example\n"
+                                             "Rita Edwards,re@corp.example\nAnne Vance,av@corp.example\nZorbina Quellwater,zq@corp.example\n")
+        (t / "box/hr/Zorbina_Quellwater-review.md").write_text("Rota: amiller, scarter, redwards. We planned it.\n")
+        sh, calls = transport._sh, []
+        def remote(node, cmd, data=None, timeout=60):                           # "ssh": run here, and record
+            calls.append((cmd, data))                                           # what this machine would see
+            return sh({}, cmd, data, timeout)
+        transport._sh = remote
+        try:
+            box = {"ssh": "box", "trust": ["hr", "hr~"], "out": str(t / "bo"), "stage": str(t / "bs")}
+            q = {**p, "scopes": {f"box:{t}/box/hr": "hr", **{d: s for d, s in p["scopes"].items() if s != "hr"}},
+                 "nodes": {**p["nodes"], "box": box}}
+            pop = door.Door({**q, "workspace": str(t / "ws4")}, t / "state4", "pop")
+            (t / "ws4").mkdir()
+            pop.prepare(lambda scope: lambda text: [])
+            assert calls and not any("Zorbina" in c for c, _ in calls), calls  # no path on a command line, and
+            assert {len(d) for c, d in calls if "NODE" in c or d and len(d) == 4096} <= {4096}   # one size on the wire
+            cloud = door.Door({**q, "workspace": str(t / "ws2")}, t / "state4", "cloud")
+            (t / "ws2").mkdir()
+            cloud.prepare(lambda scope: lambda text: [])
+            calls.clear()
+            listing = cloud.read(".")["text"]
+            alias = next(a for a in cloud.alias if "review" in a)
+            view = cloud.read(alias)["text"]
+            assert not calls, calls                                             # nothing crosses at request time
+            assert "Zorbina" not in listing and not re.search(r"amiller|scarter|redwards", view), view
+            assert "We planned it." in view, view
+        finally:
+            transport._sh = sh
+
+
 def test_own_precision():
     """Caller text: everyday and technical words stay as written; names, in any of the forms the hunts used, do not."""
     import scrub

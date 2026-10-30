@@ -62,7 +62,8 @@ def regular(top):                              # (path, bytes) of each regular f
 '''
 
 NODE = OPEN + r'''
-mode, p = sys.argv[1], sys.argv[2]
+import json
+mode, p = json.loads(sys.stdin.read())
 if mode == "files":
     sys.stdout.write("".join(f + "\0" for f, _ in regular(p)))
 elif mode == "cat":
@@ -140,7 +141,12 @@ def _sh(node, cmd, data=None, timeout=60):
 
 
 def _node(node, mode, path, timeout):
-    return _sh(node, "python3 -c " + shlex.quote(NODE) + f" {mode} " + shlex.quote(path), timeout=timeout)
+    """A path goes on stdin, padded to one size: never in a command line, which any process of this user
+    can read (sysctl kern.procargs2, even from the room), nor a length on the wire."""
+    req = json.dumps([mode, path])
+    if len(req) > 4096:
+        raise RuntimeError("a path too long")
+    return _sh(node, "python3 -c " + shlex.quote(NODE), data=req.ljust(4096).encode(), timeout=timeout)
 
 
 def kind(node, path, timeout=60):
