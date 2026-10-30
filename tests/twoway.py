@@ -8,7 +8,6 @@ In both, the cloud sees hr scrubbed and keys not at all. Everything that reached
 scanned for every canary: Claude Code's own traffic (the route's capture) and every job the
 door sent to the cloud model (its traces). Tasks are checked against the real answers.
 """
-import csv
 import glob
 import json
 import os
@@ -66,13 +65,6 @@ def make(root):
                           "sees": "everything", "dir": "/srv/lego-test"},
                   "cloud": {"api": "anthropic", "model": "claude-sonnet-5-5", "sees": {"hr": "scrubbed", "keys": "nothing"}}}}
     return policy, canaries
-
-
-def averages():
-    by = {}
-    for d, s in zip(DEPTS, SALARY):
-        by.setdefault(d, []).append(s)
-    return {d: sum(v) / len(v) for d, v in by.items()}
 
 
 FORWARD = [  # (name, prompt, check(reply, workspace, door log rows))

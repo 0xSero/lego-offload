@@ -481,7 +481,7 @@ def test_twelfth_hunt_stays_fixed():
         os.mkfifo(t / "ws2/probe")                                          # a FIFO is refused at once
         assert "regular file" in refusal(cloud, "offload", task="x", inputs=["probe"])
         GOT.clear()                                                         # a name lego gave back to pop, relayed
-        r = pop.offload("Repeat the name of the person you see.", [str(t / "hr/staff.csv")], node="cloud")
+        pop.offload("Repeat the name of the person you see.", [str(t / "hr/staff.csv")], node="cloud")
         for j in pop.jobs:
             j.join()
         back = pop.vault.unscrub(re.findall(r"\[PERSON_[0-9a-f]+\]", GOT[-1][1])[0], {"hr"}, pop.fresh)
@@ -616,9 +616,7 @@ def tmp_out():
 
 
 if __name__ == "__main__":
-    for f in (test_levels, test_forward_cloud_in_front, test_reverse_local_in_front, test_found_leaks_stay_fixed,
-              test_second_hunt_stays_fixed, test_third_hunt_stays_fixed, test_fourth_hunt_stays_fixed,
-              test_fifth_hunt_stays_fixed, test_sixth_hunt_stays_fixed, test_seventh_hunt_stays_fixed,
-              test_eighth_hunt_stays_fixed, test_ninth_hunt_stays_fixed, test_tenth_hunt_stays_fixed, test_eleventh_hunt_stays_fixed, test_twelfth_hunt_stays_fixed, test_thirteenth_hunt_stays_fixed, test_fifteenth_hunt_stays_fixed, test_sixteenth_hunt_stays_fixed):
-        f()
-        print("ok  ", f.__name__)
+    for name, f in list(globals().items()):
+        if name.startswith("test_"):
+            f()
+            print("ok  ", name)
