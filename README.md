@@ -177,15 +177,15 @@ The reply row is chosen from labels, the ledger and the node's queue alone, befo
 
 | File | Lines | What |
 |-|-|-|
-| `core.py` | 200 | The seven bricks, the cache salt and the scrubbed twin of a scope. Pure: no I/O, no clock, no network |
-| `door.py` | 375 | The simple policy, the exchange rule, and the `read` and `offload` tools, served as MCP over HTTP on localhost. Asks `core.py` at every step |
-| `scrub.py` | 94 | The vault: identifiers learned from the private files, stable placeholders, and back again |
-| `transport.py` | 153 | Carries out moves and runs over ssh, or calls a cloud model with the user's login. Constrained JSON decoding and the scope's cache salt |
-| `route.py` | 179 | Localhost proxy to the agent's model. Strips the room's placeholder, injects the real credential, captures every exchange decompressed |
-| `room.py` + `room/room.sb` | 42 + 110 | The sandbox. Deny by default: the workspace, a throwaway HOME, the agent's install directory, and the two ports |
+| `core.py` | 201 | The seven bricks, the cache salt and the scrubbed twin of a scope. Pure: no I/O, no clock, no network |
+| `door.py` | 448 | The simple policy, the exchange rule, and the `read` and `offload` tools, served as MCP over HTTP on localhost. Asks `core.py` at every step |
+| `scrub.py` | 195 | The vault: identifiers learned from the private files (patterns with checksums, table columns, a local model), stable placeholders, and back again per scope |
+| `transport.py` | 154 | Carries out moves and runs over ssh, or calls a cloud model with the user's login. Constrained JSON decoding and the scope's cache salt |
+| `route.py` | 177 | Localhost proxy to the agent's model. Strips the room's placeholder, injects the real credential, captures every exchange decompressed |
+| `room.py` + `room/room.sb` | 40 + 110 | The sandbox. Deny by default: the workspace, a throwaway HOME, the agent's install directory, and the two ports |
 | `agents.py` | 127 | One adapter per agent: config pointing the model at the route and tools at the door |
-| `lego.py` + `lego` | 123 + 3 | The CLI. Picks the agent's own model, fills the vault, one session at a time per policy |
-| **implementation** | **1,406** | app, tests and verification excluded |
+| `lego.py` + `lego` | 133 + 3 | The CLI. Picks the agent's own model, fills the vault, one session at a time per policy |
+| **implementation** | **1,588** | app, tests and verification excluded |
 | `app.py` + `app.html` | 157 + 141 | `lego app`: a local page to run tasks and watch the door |
 | `verify/` | | `Lego.lean` (the proof), `twin.py` (Lean vs the door), `sim.bend` + `sim_ref.py` (the simulation). See [`verify/README.md`](verify/README.md) |
 | `tests/` | | `test_core.py`, `test_queue.py`, `test_exchange.py`, `test_room.py`, `test_agents.py`, `e2e.py`, `twoway.py`, `contention.py`, `traces.py`, `report.py` |
@@ -229,7 +229,10 @@ All numbers come from the last `./run`. [`results/REPORT.md`](results/REPORT.md)
 - get private bytes through the door: replies are full only when every input is public;
 - learn more about a scope than its allowance: the ledger is charged before the job runs, and `leak_bound` proves the bound;
 - use timing: shaped replies arrive at a fixed deadline, the node's prompt cache is salted by scope, jobs on a node are queued so a public reply never overlaps private work, and the policy refuses a host that also runs a model (shared CPU and GPU);
-- name its way around the labels: unlisted paths are sealed, and policies with a public path inside a scope are refused.
+- name its way around the labels: unlisted paths are sealed, and policies with a public path inside a scope are refused;
+- launder through its workspace: workspace files carry every scope the agent has been given, and that label outlives the session (a later agent that may not see it is refused until `lego reset --workspace`); the workspace may not overlap a private directory, lego's state or a local model's directory; links and hardlinks are labelled where the bytes really are, and a file is pinned by inode when it is labelled, so swapping it for a link before the job reads it fails the job;
+- use the scrubber as an oracle: placeholders are turned back into real values only for a model that sees their scope raw, and never in a refusal;
+- borrow another model's level: each cloud agent runs as the policy's model with its own `api`, and an agent with no entry sees nothing.
 
 **Not covered:**
 
