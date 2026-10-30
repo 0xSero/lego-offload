@@ -235,7 +235,12 @@ class Door:
             f.seek(0), f.truncate(), f.write(json.dumps(t))
 
     def _note(self, **kw):
-        self.log.write(json.dumps({"t": round(time.time(), 3), **kw}) + "\n")
+        """One record of one size: the log's growth, which df shows, never depends on what it holds."""
+        line = json.dumps({"t": round(time.time(), 3), **kw})
+        if len(line) >= 4096:                                  # a long one keeps what says what happened
+            line = json.dumps({"t": round(time.time(), 3), "long": True,
+                               **{k: v for k, v in kw.items() if k in ("op", "node", "ref", "row", "bits")}})
+        self.log.write(line.ljust(4095) + "\n")
         self.log.flush()
 
     def hidden(self, scopes):
@@ -448,8 +453,7 @@ class Door:
             raw = lvl == "everything" and all(s in v.trust for n, v in self.nodes.items() if runnable(self.p["nodes"][n]))
             new, named = 0, []
             for f in (found[:60] if raw else found) if lvl != "nothing" else []:
-                if f"{node}:{f}" not in self.learned and not raw and not self.vault.known(
-                        f"{node}:{f}", transport.read(self.p["nodes"][node], f)):
+                if f"{node}:{f}" not in self.learned and not raw and f"{node}:{f}" not in self.vault.v["files"]:
                     new += 1                                   # not learned: its name may hold an identifier
                     continue
                 tag = hmac.new(bytes.fromhex(self.vault.v["key"]), f.encode(), "sha256").hexdigest()[:8]
@@ -586,6 +590,8 @@ class Door:
                  for (i, s), (g, s2) in zip(srcs, (self.give(i, self.nodes[n]) for i, _ in srcs))]  # like its task
         if any(i.ref in self.deferred and i.node not in (self.host, n) for i, _ in given):
             raise core.Refused(f"data hidden from you on another machine goes only to a model on that machine, not {n}")
+        if any(i.ref in self.refs and i.node != n and not core.may_hold(self.me, i.scopes) for i, _ in given[:-1]):
+            raise core.Refused(f"a job's output you may not see stays on its machine: run the next job there, not {n}")
         if any(s and i.ref in self.deferred for i, s in given):
             raise core.Refused("data hidden from you goes only to a model that sees it raw")
         scrub_task = given[-1][1] or not everything            # names it saw in this tool's text, too
@@ -595,7 +601,8 @@ class Door:
                 if self.vault.own(scrub.norm(str(x)), {}, tags) != scrub.norm(str(x)):
                     raise core.Refused(f"returns: {x!r} would reach {n} as written, but it sees this data scrubbed. "
                                        "Use plain words, placeholders you were given, and int bounds under 1000")
-        typed = set() if scrub_task else self.raw & set(self.scopes.values())   # a raw task's output may hold them
+        typed = set() if scrub_task and self.tags(ins[-1], reader) else self.raw & set(self.scopes.values())   # a
+                                                               # task that went raw: its output may hold them
         snap = {i.ref: self.bytes_of(i, False) for i, _ in given[:-1] if self.mine(i)}   # the caller's files, read
         with self.locks[n]:                                    # now: the job never touches the workspace
             t0 = time.time()
@@ -642,9 +649,11 @@ class Door:
             if any(s for _, s in given) or not everything:    # the real names' order is theirs too
                 given = secrets.SystemRandom().sample(given, len(given))
             for i, s in given:
-                if i.ref in self.deferred:                     # hidden: whole, as one pipe, walked on the node, where
-                                                               # a link on the way gives no file (keys/mirror -> hr);
-                                                               # nothing here looks inside it
+                if i.ref in self.deferred or not s and i.node != n and i.ref not in self.refs and not core.may_hold(
+                        self.me, i.scopes):                    # raw and not the caller's to see: its whole scope, as
+                                                               # one pipe, walked on the node, where a link on the way
+                                                               # gives no file (keys/mirror -> hr); nothing here looks
+                                                               # inside it, and no single file's size or name crosses
                     root = next(r for d in self.scopes if (r := d.partition(":")[2]) and d.startswith(i.node + ":")
                                 and inside(i.ref.partition(":")[2], r))
                     if i.node != n and (n, root) not in self.staged:   # the whole scope, once per node: what

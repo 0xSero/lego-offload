@@ -110,7 +110,7 @@ try:
     out = resp["choices"][0]["message"]["content"] or ""
     open(job["out"], "w").write(out)
     json.dump({"request": body, "response": resp}, open(job["out"] + ".trace.json", "w"))  # stays on the node
-    res = {"took": time.time() - t0, "output": None if hold else out}
+    res = {"took": 0.0 if hold else time.time() - t0, "output": None if hold else out}
     if job.get("shaped"):                      # only the answer comes back, parsed here
         try:
             res["answer"] = json.loads(out.strip().removeprefix("```json").removesuffix("```"))["answer"]
@@ -323,8 +323,13 @@ def run_job(node, files, task, schema, out_path, keep, timeout, salt=None, shape
     t0 = time.time()
     _sh(node, f"mkdir -p {shlex.quote(out_path.rsplit('/', 1)[0])}", timeout=timeout)
     job["timeout"] = max(0.05, timeout - (time.time() - t0))
+    data = json.dumps(job)
+    if job["keep"]:                                            # the files' names cross padded: one size per file
+        if any(len(json.dumps(f)) > 4000 for f in files):
+            raise RuntimeError("a path too long")
+        data = data.ljust(len(json.dumps({**job, "files": [""] * len(files), "timeout": 0})) + 32 + 4096 * len(files))
     raw = _sh(node, "python3 -c " + shlex.quote(RUNNER) + (" 2>/dev/null" if job["keep"] else ""),   # no traceback
-              data=json.dumps(job).encode(), timeout=job["timeout"] + 0.5)   # crosses; it ends half a second early
+              data=data.encode(), timeout=job["timeout"] + 0.5)   # crosses; it ends half a second early
     return json.loads(raw)
 
 

@@ -1219,6 +1219,70 @@ def test_thirtieth_hunt_stays_fixed():
         assert max(s for _, s in replies) - min(s for _, s in replies) < 0.3, replies   # model did
 
 
+def test_thirty_first_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/Zorbina_Quellwater-review.md").write_text("Review: Zorbina Quellwater exceeded targets.\n")
+        (t / "hr/Al_Wu-review.md").write_text("Review: Al Wu exceeded targets.\n")
+        simple = {"private": {"hr": str(t / "hr"), "keys": str(t / "keys")}, "workspace": str(t / "ws"),
+                  "deadline": 0.3, "job_timeout": 1, "models": {
+                      "pop": {"url": "http://x/v1", "model": "local", "sees": "everything", "dir": str(t / "pop")},
+                      "mid": {"url": "http://x/v1", "model": "local", "sees": {"hr": "everything", "keys": "nothing"},
+                              "dir": str(t / "mid")},
+                      "two": {"url": "http://x/v1", "model": "local", "sees": "everything", "dir": str(t / "two")},
+                      "cloud": {"api": "anthropic", "model": "cloud", "sees": {"hr": "scrubbed", "keys": "nothing"}}}}
+        p = door.expand(simple, t / "state")
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2").mkdir()
+        cloud.prepare(lambda scope: lambda text: [])
+        log, grew = t / "state/door.jsonl", []
+        cloud.read(".")
+        for alias in [a for a in cloud.alias if "review" in a]:                 # a log line: one size, whatever
+            n = log.stat().st_size                                              # name it holds
+            cloud.read(alias)
+            grew.append(log.stat().st_size - n)
+        assert grew == [4096, 4096], grew
+        (t / "hr/late.md").write_text("Zorbina " * 1000)                        # the catalog never reads a file
+        read = transport.read
+        transport.read = lambda node, path, timeout=60: 1 / 0 if "late" in path else read(node, path, timeout)
+        try:
+            assert "1 files added" in cloud.read(".")["text"]
+        finally:
+            transport.read = read
+        os.remove(t / "hr/late.md")
+        put, tree, sent = transport.put, transport.put_tree, []
+        transport.put = lambda node, d, name, data, timeout=60: sent.append(name) or put(node, d, name, data, timeout)
+        transport.put_tree = lambda node, d, src, timeout=60: sent.append(src) or tree(node, d, src, timeout)
+        try:
+            for alias in [a for a in cloud.alias if "review" in a]:             # raw, a file the caller sees
+                cloud.offload("x", [alias], {"bool": True}, node="pop")         # scrubbed: its whole scope, once
+            for j in cloud.jobs:
+                j.join()
+        finally:
+            transport.put, transport.put_tree = put, tree
+        assert sent == [str(t / "hr")], sent
+        ref = cloud.offload("x", [str(t / "keys/prod.env")], node="pop")["ref"]   # a hidden job's output stays
+        for j in cloud.jobs:
+            j.join()
+        assert "stays on its machine" in refusal(cloud, "offload", task="x", inputs=[ref], node="two")
+        GOT.clear()
+        out = pop.offload("Ask Zorbina Quellwater.", [], node="mid")["ref"]     # a raw task's output keeps its
+        assert "Zorbina" in GOT[-1][1] and "hr" in pop.refs[out], pop.refs      # scopes: the cloud never gets it
+        assert pop.give(pop.item(out), pop.nodes["cloud"]) is None
+        sh, sent = transport._sh, []                                            # a hidden job's request: one size
+        transport._sh = lambda node, cmd, data=None, timeout=60: sent.append(len(data or b"")) or b"{}"   # per file
+        try:
+            for name in ("Al_Wu-review.md", "Zorbina_Quellwater-review.md"):
+                real_run({"model": {"model": "m", "base_url": "http://x/v1"}}, [f"/s/{name}"], "x", None, "/o/x.txt",
+                         keep=True, timeout=5)
+        finally:
+            transport._sh = sh
+        assert sent[1] == sent[3], sent
+        assert not any(json.loads(line).get("long") is None and len(line) != 4095 for line in log.read_text().splitlines())
+
+
 def test_own_precision():
     """Caller text: everyday and technical words stay as written; names, in any of the forms the hunts used, do not."""
     import scrub
