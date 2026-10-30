@@ -394,10 +394,17 @@ class Door:
             return {"row": "listing", "text": self.listing()}
         if it.node == self.host and not os.path.isfile(path):
             raise core.Refused(f"no file {ref}. read \".\" lists what you can name.")
-        text = self.bytes_of(*got).decode(errors="replace")
+        text, before = self.bytes_of(*got).decode(errors="replace"), self.cut_off()
         self.taint(got[0].scopes)
         self._note(op="read", ref=it.ref, scopes=sorted(got[0].scopes), scrubbed=got[1])
-        return {"row": "scrubbed" if got[1] else "full", "text": text}
+        cut = [n for n in self.cut_off() if n not in before]   # from the scopes and the policy alone
+        return {"row": "scrubbed" if got[1] else "full", "text": text,
+                **({"note": f"lego: {', '.join(cut)} can now take no more tasks from you."} if cut else {})}
+
+    def cut_off(self):
+        """The other models that may not be given what the caller's context holds."""
+        return [n for n, v in self.p["nodes"].items() if runnable(v) and n != self.caller and any(
+            self.level(s.rstrip("~"), self.nodes[n]) == "nothing" for s in self.context if s != core.SEALED)]
 
     def pick_node(self, items, want):
         models = [n for n, v in self.p["nodes"].items() if runnable(v)]
@@ -599,8 +606,9 @@ class Door:
                 why = str(e) if isinstance(e, core.Refused) else f"call failed ({type(e).__name__})"
                 self._note(op="refused", reason=why)
                 out = {"refused": why}
-            res = {"content": [{"type": "text", "text": out.pop("text") if "text" in out else json.dumps(out)}],
-                   "isError": "refused" in out}
+            note = out.pop("note", None)                       # a read that cut a model off says so
+            res = {"content": [{"type": "text", "text": out.pop("text") if "text" in out else json.dumps(out)}] +
+                   ([{"type": "text", "text": note}] if note else []), "isError": "refused" in out}
         elif mid is None:
             return None                                        # notification
         else:
