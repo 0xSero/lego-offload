@@ -104,7 +104,15 @@ resp = json.loads(urllib.request.urlopen(req, timeout=job["timeout"]).read())
 out = resp["choices"][0]["message"]["content"] or ""
 open(job["out"], "w").write(out)
 json.dump({"request": body, "response": resp}, open(job["out"] + ".trace.json", "w"))  # stays on the node
-print(json.dumps({"took": time.time() - t0, "output": None if job["keep"] else out}))
+res = {"took": time.time() - t0, "output": None if job["keep"] else out}
+if job.get("shaped"):                          # only the answer comes back, parsed here: its output's
+    try:                                       # length never crosses the wire
+        res["answer"] = json.loads(out.strip().removeprefix("```json").removesuffix("```"))["answer"]
+    except Exception:
+        res["answer"] = None
+    if len(json.dumps(res["answer"])) > 4096:
+        res["answer"] = None
+print(json.dumps(res).ljust(8192) if job["keep"] else json.dumps(res))   # a hidden job's reply: one size
 '''
 
 
@@ -298,10 +306,11 @@ def schema_json(s):
     return {"type": "object", "properties": {"answer": inner}, "required": ["answer"], "additionalProperties": False}
 
 
-def run_job(node, files, task, schema, out_path, keep, timeout, salt=None):
+def run_job(node, files, task, schema, out_path, keep, timeout, salt=None, shaped=False):
     """Run one model call on `node` over `files` (paths on that node). The full output is
-    written to out_path on the node; it comes back only when keep is False. The job is over a second
-    before `timeout`, killed if need be, so the node is idle when the bound the door booked comes."""
+    written to out_path on the node; it comes back only when keep is False. `shaped`: only the parsed
+    answer comes back, in a reply of fixed size. The job is over a second before `timeout`, killed if
+    need be, so the node is idle when the bound the door booked comes."""
     timeout = max(0.1, timeout - 1.0)
     if node["model"].get("api") == "anthropic":                # in a child killed at the bound: the door itself
         job = {"node": node, "files": files, "task": task, "schema": schema, "out_path": out_path, "keep": keep,
@@ -313,8 +322,8 @@ def run_job(node, files, task, schema, out_path, keep, timeout, salt=None):
         if r.returncode:
             raise RuntimeError("cloud job failed")
         return json.loads(r.stdout)
-    job = {"files": files, "task": task, "schema": schema_json(schema) if schema else None,
-           "model": node["model"], "out": out_path, "keep": keep, "timeout": timeout, "salt": salt}
+    job = {"files": files, "task": task, "schema": schema_json(schema) if schema else None, "shaped": shaped,
+           "model": node["model"], "out": out_path, "keep": keep or shaped, "timeout": timeout, "salt": salt}
     t0 = time.time()
     _sh(node, f"mkdir -p {shlex.quote(out_path.rsplit('/', 1)[0])}", timeout=timeout)
     job["timeout"] = max(0.05, timeout - (time.time() - t0))

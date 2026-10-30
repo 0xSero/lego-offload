@@ -1,6 +1,7 @@
 """The exchange rule, both ways, with a stub model (no network): what each model is given is what
 its level allows, scrubbed text holds no identifier, a model that sees everything gets real names
 back, and links or workspace copies do not launder a label."""
+import http.server
 import json
 import os
 import re
@@ -20,7 +21,7 @@ import core  # noqa: E402
 GOT = []                                                       # (node, what the model was given)
 
 
-def fake_job(node, files, task, returns, out, keep, timeout, salt=None):     # the files are staged on this host
+def fake_job(node, files, task, returns, out, keep, timeout, salt=None, **_):     # the files are staged on this host
     walk = [x for f in files for x in (sorted(p for p in Path(f).rglob("*") if p.is_file()) if Path(f).is_dir() else [Path(f)])]
     seen = task + "".join(x.name + x.read_text() for x in walk)
     GOT.append((node["model"]["model"], seen))
@@ -1114,6 +1115,55 @@ def test_twentyeighth_hunt_stays_fixed():
         assert "Good" not in GOT[-1][1], GOT[-1][1]                               # a joined title: still a title
         for j in pop.jobs + cloud.jobs:
             j.join()
+
+
+def test_twentyninth_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/more.csv").write_text("name\nLena Ritter\nHenning Bonner\n")
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        pop.read(str(t / "hr/more.csv"))
+        GOT.clear()
+        pop.offload("Ask ritter and henning about bonner.", [], node="cloud")
+        assert not re.search(r"ritter|henning|bonner", GOT[-1][1]), GOT[-1][1]   # caller text: no doubling rule
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2").mkdir()
+        put, staged = transport.put_tree, []
+        transport.put_tree = lambda node, stage, src, timeout=60: staged.append(src) or put(node, stage, src, timeout)
+        try:
+            for f in ("prod.env", "staging.env", "prod.env"):                  # what crosses: the whole scope, once
+                cloud.offload("Is it live?", [str(t / "keys" / f)], node="pop")
+            for j in cloud.jobs:
+                j.join()
+        finally:
+            transport.put_tree = put
+        assert staged == [str(t / "keys")], staged
+        class Model(http.server.BaseHTTPRequestHandler):                        # a model whose output varies
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                out = json.dumps({"answer": True}) + " " * (5000 if "long" in body["messages"][1]["content"] else 0)
+                data = json.dumps({"choices": [{"message": {"content": out}}]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Model)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        sh, sizes = transport._sh, []
+        transport._sh = lambda *a, **k: (lambda b: sizes.append(len(b)) or b)(sh(*a, **k))
+        try:
+            node = {"model": {"model": "m", "base_url": f"http://127.0.0.1:{srv.server_address[1]}/v1"}}
+            for task in ("short", "long"):
+                r = real_run(node, [], task, {"bool": True}, str(t / f"out/{task}.txt"), keep=False, timeout=30, shaped=True)
+                assert r["answer"] is True and r["output"] is None, r
+        finally:
+            transport._sh = sh
+            srv.shutdown()
+        assert sizes[1] == sizes[3], sizes                                       # the reply: one size, whatever it held
 
 
 def test_own_precision():

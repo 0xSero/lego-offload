@@ -195,6 +195,7 @@ class Door:
         self.found = {}                                        # scope dir -> its files, listed before the agent starts
         self.learned = set()                                    # files the catalog found in the vault
         self.deferred = set()                                   # hidden inputs, expanded only inside their job
+        self.staged = {}                                        # (node, hidden scope dir) -> its copy there
         self.fresh = {}                                         # the caller's own words -> placeholders, and back
         names = list(policy["nodes"])                           # the queue on each node (core.queue)
         self.slots = {n: (0.0, frozenset()) for n in names}
@@ -645,8 +646,10 @@ class Door:
                     root = next(r for d in self.scopes if (r := d.partition(":")[2]) and d.startswith(i.node + ":")
                                 and inside(i.ref.partition(":")[2], r))
                     transport.unlinked(self.p["nodes"][i.node], root, i.ref.partition(":")[2], left())  # keys/mirror -> hr
-                    files.append(i.ref.partition(":")[2] if i.node == n else
-                                 transport.put_tree(node, node["stage"], i.ref.partition(":")[2], left()))
+                    if i.node != n and (n, root) not in self.staged:   # the whole scope, once per node: what
+                        self.staged[n, root] = transport.put_tree(node, node["stage"], root, left())   # crosses
+                    files.append(i.ref.partition(":")[2] if i.node == n else   # the wire is the same whatever
+                                 self.staged[n, root] + i.ref.partition(":")[2][len(root):])   # was named
                     continue
                 name = i.ref.rsplit("/", 1)[-1]
                 name = name if everything and not s else self.vault.scrub_name(
@@ -655,11 +658,12 @@ class Door:
                     node, node["stage"], name, self.bytes_of(i, s, left(), reader, snap.get(i.ref)), left()), left()))
             core.run([core.move(g, self.nodes[n]) for g, _ in given], self.nodes[n], out.ref)
             r = transport.run_job(node, files, task, returns, out.ref.partition(":")[2], keep=row == "receipt",
-                                  timeout=left(), salt=core.salt(self.salt_key, out.scopes))
+                                  timeout=left(), salt=core.salt(self.salt_key, out.scopes), shaped=row == "shaped")
             self._note(op="done", ref=out.ref, took=round(r["took"], 2))
             if row == "shaped":                                # here, before `end`: the reply never parses
                 o = r.get("output")
-                r["value"] = core.shape(transport.answer(o), returns) if isinstance(o, str) and len(o) <= 4096 else core.UNKNOWN
+                r["value"] = core.shape(r["answer"], returns) if "answer" in r else core.shape(transport.answer(o), returns) \
+                    if isinstance(o, str) and len(o) <= 4096 else core.UNKNOWN
             return r
         except Exception as e:                                 # never echo private detail to the cloud
             self._note(op="error", ref=out.ref, error=str(e)[:300])

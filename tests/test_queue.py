@@ -20,7 +20,7 @@ POLICY = {"host": "mac", "workspace": "/ws", "public": ["/ws/a.py"], "deadline":
 SPANS, LOCK = [], threading.Lock()
 
 
-def fake_job(node, files, task, returns, out, keep, timeout, salt):
+def fake_job(node, files, task, returns, out, keep, timeout, salt, **_):
     t0 = time.time()
     time.sleep(min(float(task), timeout))                          # the task text is the job's length
     with LOCK:

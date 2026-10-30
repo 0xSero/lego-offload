@@ -461,7 +461,7 @@ class Vault:
                                             lambda m: tok("NAME", m.group(0)), seg))
         text = out(text, lambda seg: re.sub(r"(\0?)((?<![\w'])[\w'-]*[A-Z][\w'-]*)", lambda m: m.group(2) if m.group(1)
                                             and m.group(2).lower() in STARTERS else tok("NAME", m.group(2)), seg))
-        return out(text, lambda seg: re.sub(r"[^\W\d_]+", lambda m: m.group(0) if (word(m.group(0)) or m.group(0).lower()
+        return out(text, lambda seg: re.sub(r"[^\W\d_]+", lambda m: m.group(0) if (word(m.group(0), False) or m.group(0).lower()
                                             in TECH) and m.group(0).lower() not in FIRST and not (m.group(0)[0].isupper() and m.group(0).lower() in LOW)
                                             else tok("NAME", m.group(0)), seg).replace("\0", ""))   # zorbina, 王伟; frank
 
@@ -551,12 +551,13 @@ except OSError:
     FIRST = set()
 
 
-def word(w):
-    """In the dictionary, as written or inflected (salaries, reviewed, offloading)."""
+def word(w, doubled=True):
+    """In the dictionary, as written or inflected (salaries, reviewed, offloading). `doubled`: planned from
+    plan too, which caller text does without (ritter is no word for it: rit is one)."""
     w = w.lower()
     return w in WORDS or any(w.endswith(a) and w[:-len(a)] + b in WORDS and len(w) - len(a) >= n for a, b, n in (
         ("s", "", 1), ("ies", "y", 1), ("ed", "", 1), ("ed", "e", 1), ("ing", "", 1), ("ing", "e", 1), ("ly", "", 1),
         ("er", "", 4), ("ers", "", 4), ("'s", "", 1), ("ising", "ize", 1), ("ise", "ize", 1), ("ised", "ize", 1),
         ("est", "", 1), ("iest", "y", 1))) or bool(re.search(r"(s|x|z|ch|sh|o)es$", w)) and w[:-2] in WORDS or \
-        bool(d := re.fullmatch(r"(\w*([b-df-hj-np-tv-z]))\2(?:ed|ing|er|est)", w)) and d.group(1) in WORDS   # planned
+        doubled and bool(d := re.fullmatch(r"(\w*([b-df-hj-np-tv-z]))\2(?:ed|ing|er|est)", w)) and d.group(1) in WORDS
                                                                # deeper, not huber; catches, not hayes
