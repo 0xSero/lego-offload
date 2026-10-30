@@ -478,9 +478,3 @@ def word(w):
     return w in WORDS or any(w.endswith(a) and w[:-len(a)] + b in WORDS for a, b in (
         ("s", ""), ("es", ""), ("ies", "y"), ("ed", ""), ("ed", "e"), ("ing", ""), ("ing", "e"), ("ly", ""),
         ("er", ""), ("ers", ""), ("'s", ""), ("ising", "ize"), ("ise", "ize"), ("ised", "ize"), ("est", ""), ("iest", "y")))
-
-
-def everyday(w):
-    """A capitalised word that is also an everyday word (The, Polish, Monday): not taken for a name."""
-    w = w.strip("'-")
-    return not w or (w[1:].islower() or w.isupper()) and w.lower() not in COMMON and (word(w) or w.lower() in ("i", "a"))
