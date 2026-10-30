@@ -649,6 +649,34 @@ def test_seventeenth_hunt_stays_fixed():
             j.join()
 
 
+def test_eighteenth_hunt_stays_fixed():
+    import scrub
+    v = scrub.Vault(tempfile.mkdtemp() + "/v.json")
+    for text in ("Manager: List", "- List: raise? No objections.", "Prof. List signs.", "Ask F. List.",
+                 "J. Read starts.", "Sign-off: Prof. Good.", "Ask Capt. Read."):
+        out = v.own(scrub.norm(text), {}, {"hr"})
+        assert not re.search(r"\b(List|No|Read|Good)\b", out), (text, out)   # names after a title or initial
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/staff.csv").write_text("name\nWei Li\nMei Ng\n")
+        (t / "hr/logins.md").write_text("liwei, weili, LIWEI, ngmei, NGMEI, meing\n")
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2").mkdir()
+        view = cloud.read(str(t / "hr/logins.md"))["text"]
+        assert not re.search(r"(?i)li|wei|mei|ng", view), view                  # short parts glued, any order
+        for public, inner in (([], {str(t / "hr/keys"): "keys"}), ([str(t / "pub")], {str(t / "pub/hr"): "hr"})):
+            try:
+                q = {**p, "public": public, "scopes": {**p["scopes"], **{f"{pop.host}:{d}": s for d, s in inner.items()}}}
+                door.Door(q, t / "state_n", "pop")
+                raise AssertionError("nested scope accepted")
+            except core.Refused as e:
+                assert "inside" in str(e), e
+        for j in pop.jobs + cloud.jobs:
+            j.join()
+
+
 def test_own_precision():
     """Caller text: everyday and technical words stay as written; names, in any of the forms the hunts used, do not."""
     import scrub

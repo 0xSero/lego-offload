@@ -356,8 +356,18 @@ class Vault:
             return outside(inner.sub(lambda h: folded[h.group(0)], fold(w)), lambda seg: re.sub(   # zhangwei: wei too
                 r"[^\W\d_]+", lambda r: short.get(r.group(0)) or r.group(0), seg))
 
+        most = max(map(len, [*short, *folded]), default=0)
+
+        def split(w):                                          # liwei, ngmei: wholly known parts, any order
+            best = {0: []}
+            for i in range(len(w)):
+                for j in range(i + 2, min(len(w), i + most) + 1) if i in best else ():
+                    if j not in best and (w[i:j] in short or w[i:j] in folded):
+                        best[j] = best[i] + [short.get(w[i:j]) or folded[w[i:j]]]
+            return "".join(best[len(w)]) if len(best.get(len(w), [])) > 1 else None
+
         def run(m):                                            # MeiNg: short names as whole humps
-            return parts(m.group(0)) or "".join(short.get(fold(w)) or parts(w) or w
+            return split(fold(m.group(0))) or parts(m.group(0)) or "".join(short.get(fold(w)) or parts(w) or w
                                                 for w in re.split(r"(?<=[a-z])(?=[A-Z])", m.group(0)))
         return self._out(text, lambda seg: re.sub(r"[^\W\d_]+", run, seg), keep)
 
@@ -385,15 +395,16 @@ class Vault:
         text = out(text, lambda seg: re.sub(r"(?<![^\W_])(?=[^\W_]*\d)(?=[^\W_]*[^\W\d_])[^\W_]{3,}",   # e10234
                                             lambda m: tok("ID", m.group(0)), seg))
         start = r"(?:^|(?<=[.!?:;]\s)|(?<=[.!?:;]\s\s)|(?<=\n)|(?<=[-*#>]\s))"   # where a capital means nothing
-        honor = r"(?<!\bMr\.\s)(?<!\bMs\.\s)(?<!\bDr\.\s)(?<!\bMrs\.\s)(?<!\bMr\s)(?<!\bMs\s)(?<!\bDr\s)(?<!\bDear\s)"
+        honor = "".join(rf"(?<!\b{t}\s)(?<!\b{t}\s\s)" for t in (r"[A-Z]\.", "Dear", *(  # J. Read, Prof. Good
+            x + d for x in "Mr Ms Mrs Mx Dr Prof Sir Capt Col Gen Sgt Rev Hon St Lt Maj Cpt Fr".split() for d in ("", r"\."))))
         text = out(text, lambda seg: re.sub(start + honor + r"([A-Z][\w'-]*)", lambda m: "\0" + m.group(1), seg))
         text = out(text, lambda seg: re.sub(r"(?<![\w'])(?:[A-Z][\w'-]*[ \t]+)+[A-Z][\w'-]*(?![\w'])",
                                             lambda m: tok("NAME", m.group(0)), seg))
         text = out(text, lambda seg: re.sub(r"(\0?)((?<![\w'])[\w'-]*[A-Z][\w'-]*)", lambda m: m.group(2) if m.group(1)
                                             and m.group(2).lower() in STARTERS else tok("NAME", m.group(2)), seg))
         return out(text, lambda seg: re.sub(r"[^\W\d_]+", lambda m: m.group(0) if (word(m.group(0)) or m.group(0).lower()
-                                            in TECH) and m.group(0).lower() not in FIRST   # zorbina, mei, 王伟; frank, grace
-                                            else tok("NAME", m.group(0)), seg).replace("\0", ""))
+                                            in TECH) and m.group(0).lower() not in FIRST and not (m.group(0)[0].isupper() and m.group(0).lower() in LOW)
+                                            else tok("NAME", m.group(0)), seg).replace("\0", ""))   # zorbina, 王伟; frank
 
     def scrub_name(self, name, scopes, fresh=None):
         """A file name: whole first (emails, numbers), then piece by piece, `alice_nguyen-review.md` ->
@@ -470,11 +481,12 @@ thus otherwise instead for from in on at by with without about into onto over un
 thanks thank hi hello dear regards best ok okay done good great yes sure result results summary total name names""".split())
 
 
+LOW = {"list", "no", "real", "old", "part", "space"}             # List, No: surnames; list, no: words
 try:                                                            # first names, from a fixed list: never the vault
     FIRST = {w.strip().lower() for w in open("/usr/share/dict/propernames")} - {
         "will", "mark", "art", "bill", "guy", "ray", "joy", "hope", "case", "page", "lane", "rich", "sky", "major"} - set(
-        """the no real think those trying part list old plastic space sanity tolerant rodent stagger shatter
-        panacea""".split())   # macOS's list: not names
+        """the think those trying plastic sanity tolerant rodent stagger shatter panacea""".split()) - LOW
+    # macOS's list: not names, or (LOW) names only when capitalised
 except OSError:
     FIRST = set()
 

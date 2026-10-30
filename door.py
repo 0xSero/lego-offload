@@ -104,6 +104,9 @@ class Door:
         self.public = {f"{self.host}:{p}" for p in policy.get("public", [])}
         self.scopes = policy["scopes"]
         core.check_policy(self.public, self.scopes)
+        for d in self.scopes:                                  # a listing of the outer one would show the inner
+            if any(d.startswith(o.rstrip("/") + "/") for o in [*self.public, *self.scopes] if o != d):
+                raise core.Refused(f"private directory {d} is inside a public path or another private directory")
         if not set(self.scopes.values()) | {core.SEALED} <= self.nodes[self.host].trust:
             raise core.Refused("the host must be trusted with every scope: all bytes pass through it")
         if policy["nodes"][self.host].get("model"):
