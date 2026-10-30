@@ -158,10 +158,7 @@ class Door:
     def _taints(self):
         """Taints as this policy's scope names. A scope is recorded as its directories, so another policy
         reusing the name for other data does not match; data no scope here holds is SEALED (no one)."""
-        ids = {}
-        for d, s in self.scopes.items():
-            ids.setdefault(s, []).append(d)
-        name = {",".join(sorted(v)): s for s, v in ids.items()}
+        name = {self._id(s): s for s in set(self.scopes.values())}
         t = json.loads(self.taint_file.read_text()) if self.taint_file.exists() else {}
         return {w: [name.get(x.rstrip("~"), core.SEALED) + ("~" if x.endswith("~") else "") for x in v] for w, v in t.items()}
 
