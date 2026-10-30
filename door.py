@@ -180,6 +180,10 @@ class Door:
                     set(self.scopes.values()) & set(v["trust"]) - self.seen:   # sees every volume of this machine
                 raise core.Refused(f"{n} would keep jobs on data hidden from {caller} on this machine, where "
                                    f"{caller}'s agent could measure them: give {n} ssh to another machine")
+        servers = collections.Counter((v.get("ssh"), m["base_url"]) for v in policy["nodes"].values()
+                                      if runnable(v) and isinstance(m := v["model"], dict) and m.get("base_url"))
+        if any(c > 1 for c in servers.values()):               # the queue is per name: two names on one server
+            raise core.Refused("two models in the policy are one model server: give it one name")   # would time each other
         near = {w: t for w, t in self._taints().items() if inside(canon(w.lstrip("@")), self.ws)
                 or inside(self.ws, canon(w.lstrip("@")))}      # this workspace, and ones nested in or around it
         self.context = {s for w, t in near.items() if not w.startswith("@") for s in t}   # given to the caller
@@ -195,7 +199,7 @@ class Door:
         self.found = {}                                        # scope dir -> its files, listed before the agent starts
         self.learned = set()                                    # files the catalog found in the vault
         self.deferred = set()                                   # hidden inputs, expanded only inside their job
-        self.staged = {}                                        # (node, hidden scope dir) -> its copy there
+        self.staged = {}                                        # (node, from, scope dir) -> its copy there
         self.fresh = {}                                         # the caller's own words -> placeholders, and back
         names = list(policy["nodes"])                           # the queue on each node (core.queue)
         self.slots = {n: (0.0, frozenset()) for n in names}
@@ -242,6 +246,11 @@ class Door:
                                **{k: v for k, v in kw.items() if k in ("op", "node", "ref", "row", "bits")}})
         self.log.write(line.ljust(4095) + "\n")
         self.log.flush()
+
+    def whole(self, i, s, n):
+        """Does input i cross to node n as its whole scope? When it goes raw and is not the caller's to see."""
+        return i.ref in self.deferred or not s and i.node != n and i.ref not in self.refs and not core.may_hold(
+            self.me, i.scopes) and i.ref != "task"
 
     def hidden(self, scopes):
         return frozenset(scopes) - self.seen
@@ -588,7 +597,7 @@ class Door:
         reader = core.Node(n, self.nodes[n].trust & self.seen) if srcs is views else self.nodes[n]   # who sees the
         given = [(g, s or s2 or (self.mine(i) and not everything and bool(self.tags(i, reader))))   # what the caller wrote:
                  for (i, s), (g, s2) in zip(srcs, (self.give(i, self.nodes[n]) for i, _ in srcs))]  # like its task
-        if any(i.ref in self.deferred and i.node not in (self.host, n) for i, _ in given):
+        if any(self.whole(i, s, n) and i.node not in (self.host, n) for i, s in given):
             raise core.Refused(f"data hidden from you on another machine goes only to a model on that machine, not {n}")
         if any(i.ref in self.refs and i.node != n and not core.may_hold(self.me, i.scopes) for i, _ in given[:-1]):
             raise core.Refused(f"a job's output you may not see stays on its machine: run the next job there, not {n}")
@@ -649,17 +658,16 @@ class Door:
             if any(s for _, s in given) or not everything:    # the real names' order is theirs too
                 given = secrets.SystemRandom().sample(given, len(given))
             for i, s in given:
-                if i.ref in self.deferred or not s and i.node != n and i.ref not in self.refs and not core.may_hold(
-                        self.me, i.scopes):                    # raw and not the caller's to see: its whole scope, as
+                if self.whole(i, s, n):                        # raw and not the caller's to see: its whole scope, as
                                                                # one pipe, walked on the node, where a link on the way
                                                                # gives no file (keys/mirror -> hr); nothing here looks
                                                                # inside it, and no single file's size or name crosses
                     root = next(r for d in self.scopes if (r := d.partition(":")[2]) and d.startswith(i.node + ":")
                                 and inside(i.ref.partition(":")[2], r))
-                    if i.node != n and (n, root) not in self.staged:   # the whole scope, once per node: what
-                        self.staged[n, root] = transport.put_tree(node, node["stage"], root, left())   # crosses
-                    files.append(i.ref.partition(":")[2] if i.node == n else   # the wire is the same whatever
-                                 self.staged[n, root] + i.ref.partition(":")[2][len(root):])   # was named
+                    if i.node != n and (n, i.node, root) not in self.staged:   # the whole scope, once per node,
+                        self.staged[n, i.node, root] = transport.put_tree(node, node["stage"], root, left())   # from
+                    files.append(i.ref.partition(":")[2] if i.node == n else   # this disk: the wire is the same
+                                 self.staged[n, i.node, root] + i.ref.partition(":")[2][len(root):])   # whatever was named
                     continue
                 name = i.ref.rsplit("/", 1)[-1]
                 name = name if everything and not s else self.vault.scrub_name(

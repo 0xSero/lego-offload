@@ -753,7 +753,7 @@ def test_twentieth_hunt_stays_fixed():
         simple = {"private": {"hr": str(t / "hr"), "keys": str(t / "keys")}, "workspace": str(t / "ws3"), "deadline": 0.3,
                   "job_timeout": 1, "models": {
                       "pop": {"url": "http://x/v1", "model": "local", "sees": "everything", "dir": str(t / "pop")},
-                      "mid": {"url": "http://x/v1", "model": "mid", "sees": {"hr": "nothing", "keys": "everything"},
+                      "mid": {"url": "http://y/v1", "model": "mid", "sees": {"hr": "nothing", "keys": "everything"},
                               "dir": str(t / "mid")}}}
         (t / "ws3").mkdir()
         mid = door.Door(door.expand(simple, t / "state3"), t / "state3", "mid")
@@ -782,7 +782,7 @@ def test_twentyfirst_hunt_stays_fixed():
         simple = {"private": {"hr": str(t / "hr"), "keys": str(t / "keys"), "fin": str(t / "fin")},
                   "workspace": str(t / "ws3"), "deadline": 0.3, "job_timeout": 1, "models": {
                       "pop": {"url": "http://x/v1", "model": "local", "sees": "everything", "dir": str(t / "pop")},
-                      "mid": {"url": "http://x/v1", "model": "mid", "dir": str(t / "mid"),
+                      "mid": {"url": "http://y/v1", "model": "mid", "dir": str(t / "mid"),
                               "sees": {"hr": "nothing", "keys": "everything", "fin": "everything"}}}}
         (t / "ws3").mkdir()
         mid = door.Door(door.expand(simple, t / "state3"), t / "state3", "mid")
@@ -879,7 +879,7 @@ def test_twentysecond_hunt_stays_fixed():
         simple = {"private": {"hr": str(t / "hr"), "keys": str(t / "keys"), "fin": str(t / "fin")},
                   "workspace": str(t / "ws3"), "deadline": 0.3, "job_timeout": 1, "models": {
                       "pop": {"url": "http://x/v1", "model": "local", "sees": "everything", "dir": str(t / "pop")},
-                      "mid": {"url": "http://x/v1", "model": "mid", "dir": str(t / "mid"),
+                      "mid": {"url": "http://y/v1", "model": "mid", "dir": str(t / "mid"),
                               "sees": {"hr": "nothing", "keys": "everything", "fin": "scrubbed"}}}}
         (t / "ws3").mkdir()
         mid = door.Door(door.expand(simple, t / "state3"), t / "state3", "mid")
@@ -907,8 +907,8 @@ def test_twentythird_hunt_stays_fixed():
         node = lambda trust, n: {"trust": trust, "out": str(t / n / "out"), "stage": str(t / n / "stage")}  # noqa: E731
         q = {**p, "scopes": {f"box:{t}/box/hr": "hr", f"box:{t}/box/keys": "keys", **p["scopes"]},
              "nodes": {**p["nodes"], "box": node(["hr", "hr~", "keys", "keys~"], "box"),
-                       "mid": {**node(["keys", "keys~"], "mid"), "model": {"url": "http://x/v1", "model": "mid",
-                                                                         "base_url": "http://x/v1"}}}}
+                       "mid": {**node(["keys", "keys~"], "mid"), "model": {"url": "http://mid/v1", "model": "mid",
+                                                                         "base_url": "http://mid/v1"}}}}
         mid = door.Door({**q, "workspace": str(t / "ws3")}, t / "state3", "mid")
         (t / "ws3").mkdir()
         mid.prepare(lambda scope: lambda text: [])
@@ -960,10 +960,10 @@ def test_twentyfourth_hunt_stays_fixed():
         assert len({probe(f"{t}/pop/out/{f}") for f in ("real.txt/x", "miss.txt/x", "real.txt/x/y", "real.txt",
                                                         "real.txt.trace.json")}) == 1   # sealed: never looked at
         node = lambda trust, n, **m: {"trust": trust, "out": str(t / n / "out"), "stage": str(t / n / "stage"), **m}  # noqa: E731
-        model = {"model": {"url": "http://x/v1", "model": "m", "base_url": "http://x/v1"}}
+        model = lambda u: {"model": {"url": u, "model": "m", "base_url": u}}  # noqa: E731
         q = {**p, "scopes": {f"Box:{t}/box/hr": "hr", f"Box:{t}/box/keys": "keys", **p["scopes"]},
-             "nodes": {**p["nodes"], "Box": node(["hr", "hr~", "keys", "keys~"], "Box", **model),
-                       "mid": node(["keys", "keys~"], "mid", **model)}}
+             "nodes": {**p["nodes"], "Box": node(["hr", "hr~", "keys", "keys~"], "Box", **model("http://box/v1")),
+                       "mid": node(["keys", "keys~"], "mid", **model("http://mid/v1"))}}
         mid = door.Door({**q, "workspace": str(t / "ws3")}, t / "state3", "mid")
         (t / "ws3").mkdir()
         mid.prepare(lambda scope: lambda text: [])
@@ -1012,7 +1012,7 @@ def test_twentyfifth_hunt_stays_fixed():
         assert not re.search(r"hayes|barnes|huber|mayer", GOT[-1][1]) and "deeper" in GOT[-1][1], GOT[-1][1]
         node = lambda trust, n, **m: {"trust": trust, "out": str(t / n / "out"), "stage": str(t / n / "stage"), **m}  # noqa: E731
         q = {**p, "scopes": {f"box:{t}/box/hr": "hr", **p["scopes"]}, "nodes": {**p["nodes"], "box": node(["hr", "hr~"], "box"),
-             "mid": node(["keys", "keys~"], "mid", model={"url": "http://x/v1", "model": "m", "base_url": "http://x/v1"})}}
+             "mid": node(["keys", "keys~"], "mid", model={"url": "http://mid/v1", "model": "m", "base_url": "http://mid/v1"})}}
         mid = door.Door({**q, "workspace": str(t / "ws3")}, t / "state3", "mid")
         (t / "ws3").mkdir()
         (t / "ws3/ok.txt").write_text("ok\n")
@@ -1043,8 +1043,8 @@ def test_twentysixth_hunt_stays_fixed():
         q = {**p, "scopes": {f"box:{t}/box/notes": "notes", **p["scopes"]},
              "nodes": {**p["nodes"], "box": node(["notes", "notes~"], "box", ssh="box"),
                        "here": {**p["nodes"]["here"], "trust": p["nodes"]["here"]["trust"] + ["notes", "notes~"]},
-                       "mid": node(["notes", "keys", "keys~"], "mid", model={"url": "http://x/v1", "model": "m",
-                                                                           "base_url": "http://x/v1"})}}
+                       "mid": node(["notes", "keys", "keys~"], "mid", model={"url": "http://mid/v1", "model": "m",
+                                                                           "base_url": "http://mid/v1"})}}
         mid = door.Door({**q, "workspace": str(t / "ws3")}, t / "state3", "mid")
         (t / "ws3").mkdir()
         sh, ran = transport._sh, []
@@ -1227,9 +1227,9 @@ def test_thirty_first_hunt_stays_fixed():
         simple = {"private": {"hr": str(t / "hr"), "keys": str(t / "keys")}, "workspace": str(t / "ws"),
                   "deadline": 0.3, "job_timeout": 1, "models": {
                       "pop": {"url": "http://x/v1", "model": "local", "sees": "everything", "dir": str(t / "pop")},
-                      "mid": {"url": "http://x/v1", "model": "local", "sees": {"hr": "everything", "keys": "nothing"},
+                      "mid": {"url": "http://y/v1", "model": "local", "sees": {"hr": "everything", "keys": "nothing"},
                               "dir": str(t / "mid")},
-                      "two": {"url": "http://x/v1", "model": "local", "sees": "everything", "dir": str(t / "two")},
+                      "two": {"url": "http://z/v1", "model": "local", "sees": "everything", "dir": str(t / "two")},
                       "cloud": {"api": "anthropic", "model": "cloud", "sees": {"hr": "scrubbed", "keys": "nothing"}}}}
         p = door.expand(simple, t / "state")
         pop = door.Door(p, t / "state", "pop")
@@ -1281,6 +1281,34 @@ def test_thirty_first_hunt_stays_fixed():
             transport._sh = sh
         assert sent[1] == sent[3], sent
         assert not any(json.loads(line).get("long") is None and len(line) != 4095 for line in log.read_text().splitlines())
+
+
+def test_thirty_second_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/more.csv").write_text("name\nMei Park\nTom Hill\nAnna Brown\n")
+        (t / "box/hr").mkdir(parents=True)
+        (t / "box/hr/people.csv").write_text(CSV)
+        node = lambda trust, n, u=None: {"trust": trust, "out": str(t / n / "out"), "stage": str(t / n / "stage"),  # noqa: E731
+                                         **({"model": {"url": u, "model": "m", "base_url": u}} if u else {})}
+        q = {**p, "scopes": {f"box:{t}/box/hr": "hr", **p["scopes"]},
+             "nodes": {**p["nodes"], "box": node(["hr", "hr~", "keys", "keys~"], "box"),
+                       "mid": node(["hr~"], "mid", "http://mid/v1")}}
+        mid = door.Door({**q, "workspace": str(t / "ws3")}, t / "state3", "mid")
+        (t / "ws3").mkdir()
+        mid.prepare(lambda scope: lambda text: [])
+        assert "another machine" in refusal(mid, "offload", task="x", inputs=[f"box:{t}/box/hr/people.csv"],
+                                            returns={"bool": True}, node="pop")  # a scope on a third machine: never
+        try:                                                                     # packed from this disk
+            door.Door({**q, "nodes": {**q["nodes"], "box": node(["hr", "hr~"], "box", "http://mid/v1")}}, t / "s4", "mid")
+            assert False, "two names on one model server"
+        except core.Refused as e:
+            assert "one model server" in str(e)
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        view = pop.vault.scrub("park88, Park88, brown2024, Hill42, jwhill, jwpark, parkjw. The kingdom, parking.", {"hr"})
+        assert not re.search(r"(?i)park\d|brown|hill|jw", view) and "kingdom, parking" in view, view
+        assert "park" not in pop.vault.scrub_name("park88-review.md", {"hr"}).lower()
 
 
 def test_own_precision():

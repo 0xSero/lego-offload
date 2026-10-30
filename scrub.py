@@ -321,8 +321,9 @@ class Vault:
             digits = t["digits"]
             short = {f: tok for p, tok in t["parts"].items() if len(p) < 4 and p.lower() not in COMMON for f in spellings(p)}
             common = {f: tok for p, tok in t["parts"].items() if p.lower() in COMMON for f in spellings(p)}   # brown
-            self._re[scope] = (joined, forms, [re.compile(b + "(" + alt(ks) + ")" + e, fl) if ks else None for ks, fl in
-                                               ((t["ids"], re.I), (forms, 0))],
+            self._re[scope] = (joined, forms, [re.compile(b + "(" + alt(ks) + ")" + e, fl) if ks else None for ks, fl, b, e in
+                                               ((t["ids"], re.I, b, e),   # a name next to digits is still a name: park88
+                                                (forms, 0, "(?<![A-Za-z])", "(s?)(?![A-Za-z])"))],
                                folded, re.compile("|".join(map(re.escape, sorted(folded, key=len, reverse=True)))) if folded else None,
                                (digits, re.compile(r"(?<!\d)(?:" + "|".join(SEP.join(d) for d in sorted(digits, key=len, reverse=True))
                                                    + r")(?!\d)") if digits else None), short, common)
@@ -397,8 +398,11 @@ class Vault:
                 out, i, hit = (out + toks, i + n, True) if n else (out + [w[i]], i + 1, hit)
             if hit:
                 return "".join(out)
-            if len(w) > 2 and (w[1:] in glued or w[:-1] in glued):   # wli, abrown, frankq: an initial and a name
-                return w[0] + glued[w[1:]] if w[1:] in glued else glued[w[:-1]] + w[-1]
+            for k in (1, 2):                                   # wli, abrown, frankq, jwhill, parkjw: initials
+                if len(w) > k + 1 and w[k:] in glued:          # and a name
+                    return w[:k] + glued[w[k:]]
+                if len(w) > k + 1 and w[:-k] in glued:
+                    return glued[w[:-k]] + w[-k:]
             return None
 
         def only(r):                                           # dev[P]ops is [P]: letters left around a part
