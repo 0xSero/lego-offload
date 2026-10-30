@@ -78,7 +78,8 @@ MARKS = {**dict.fromkeys(map(ord, "\u2018\u2019\u02bc\uff07\u0060\u00b4"), "'"),
 
 def norm(s):
     """NFKC, invisible format characters removed, a hyphen at a line break joined, zq(at)corp[dot]com as written."""
-    s = re.sub(r"-\n\s*", "", unicodedata.normalize("NFKC", s).translate(CF).translate(MARKS))
+    s = unicodedata.normalize("NFKC", s).translate(CF).translate(MARKS)
+    s = re.sub(r"-[ \t]*(?:\r\n|[\r\n\x0b\x0c\x85\u2028\u2029])\s*", "", s)   # Quell-\r\nwater too
     s = re.sub(r"(?i)(?<=\w)\s*[\[({<]\s*at\s*[\])}>]\s*(?=\w)", "@", s)
     return re.sub(r"(?i)(?<=\w)\s*[\[({<]\s*dot\s*[\])}>]\s*(?=\w)", ".", s)
 
@@ -398,9 +399,18 @@ class Vault:
                 return w[0] + short[w[1:]] if w[1:] in short else short[w[:-1]] + w[-1]
             return None
 
-        def run(m):                                            # MeiNg: short names as whole humps; O'brien whole
-            return glue(re.sub("['" + MARK + "]", "", fold(m.group(0)))) or parts(m.group(0)) or "".join(short.get(fold(w)) or parts(w) or w
-                                                for w in re.split(r"(?<=[a-z])(?=[A-Z])", m.group(0)))
+        def only(r):                                           # dev[P]ops is [P]: letters left around a part
+            return "".join(re.findall(r"\[[A-Z]+_[0-9a-f]+\]", r)) if r else None   # would spell it (tran+sfer)
+
+        def hump(h):                                           # transfer, planned, let: words, whatever they hold
+            return short.get(fold(h)) or (h if word(re.sub("['" + MARK + "]", "", h)) else
+                                           only(glue(re.sub("['" + MARK + "]", "", fold(h)))) or only(parts(h)) or h)
+
+        def run(m):                                            # MeiNg, TransferMei: hump by hump; zOrBiNa,
+            w = m.group(0)                                     # O'brien: whole
+            if re.fullmatch(r"[A-Za-z][a-z]+(?:[A-Z][a-z]+)+", w):
+                return "".join(map(hump, re.split(r"(?<=[a-z])(?=[A-Z])", w)))
+            return hump(w)
         return self._out(text, lambda seg: re.sub(WORD, run, seg), keep)
 
     def own(self, text, fresh, scopes=()):
@@ -534,5 +544,6 @@ def word(w):
     return w in WORDS or any(w.endswith(a) and w[:-len(a)] + b in WORDS and len(w) - len(a) >= n for a, b, n in (
         ("s", "", 1), ("ies", "y", 1), ("ed", "", 1), ("ed", "e", 1), ("ing", "", 1), ("ing", "e", 1), ("ly", "", 1),
         ("er", "", 4), ("ers", "", 4), ("'s", "", 1), ("ising", "ize", 1), ("ise", "ize", 1), ("ised", "ize", 1),
-        ("est", "", 1), ("iest", "y", 1))) or bool(re.search(r"(s|x|z|ch|sh|o)es$", w)) and w[:-2] in WORDS
+        ("est", "", 1), ("iest", "y", 1))) or bool(re.search(r"(s|x|z|ch|sh|o)es$", w)) and w[:-2] in WORDS or \
+        bool(d := re.fullmatch(r"(\w*([b-df-hj-np-tv-z]))\2(?:ed|ing|er|est)", w)) and d.group(1) in WORDS   # planned
                                                                # deeper, not huber; catches, not hayes

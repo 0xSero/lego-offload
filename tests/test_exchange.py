@@ -1059,6 +1059,40 @@ def test_twentysixth_hunt_stays_fixed():
                 pass
 
 
+def test_twentyseventh_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/more.csv").write_text("name\nMinh Tran\nThi Le\nAnne Vance\n")
+        (t / "hr/crlf.txt").write_bytes(b"Zorbi-\r\nna Quell-\r\nwater, QUELL-\r\nWATER, Brim-\rstoke, Quell- \nwater\r\n")
+        memo = "Payroll: the bank transfer is approved. Please let us know; we planned an advance on the salary channel.\n"
+        (t / "hr/memo.txt").write_text(memo)
+        (t / "hr/Zorbina.md").write_text("file A\n")
+        (t / "hr/Quellwater.md").write_text("file B\n")
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2").mkdir()
+        view = cloud.read(str(t / "hr/crlf.txt"))["text"]
+        assert not leaked(view), view                                           # any line ending
+        assert cloud.read(str(t / "hr/memo.txt"))["text"] == memo               # words stay words: tran+sfer would
+        names = [n.strip() for n in cloud.read(".")["text"].splitlines() if n.strip().endswith(".md") or "#" in n]
+        assert len(names) == len(set(names)) == 2, names                        # never one name for two files
+        assert {cloud.read(n)["text"] for n in names} == {"file A\n", "file B\n"}
+        node = lambda n: {"trust": ["notes", "notes~"], "out": str(t / n / "out"), "stage": str(t / n / "stage")}  # noqa: E731
+        here = {**p["nodes"]["here"], "trust": p["nodes"]["here"]["trust"] + ["notes", "notes~"]}
+        for scopes, extra in (({f"box:{t}/ws9/notes": "notes"}, {"workspace": str(t / "ws9")}),   # a workspace holding it
+                              ({f"box:{t}/hr/notes": "notes"}, {}),                              # inside a private dir
+                              ({f"box:{t}/pub": "notes"}, {"public": [f"{t}/pub/a.txt"]})):  # holding a public file
+            try:
+                door.Door({**p, **extra, "scopes": {**p["scopes"], **scopes}, "nodes": {**p["nodes"], "box": node("box"),
+                                                                                       "here": here}}, t / "s7", "cloud")
+                raise AssertionError(f"accepted {scopes}")
+            except core.Refused:
+                pass
+        for j in pop.jobs + cloud.jobs:
+            j.join()
+
+
 def test_own_precision():
     """Caller text: everyday and technical words stay as written; names, in any of the forms the hunts used, do not."""
     import scrub

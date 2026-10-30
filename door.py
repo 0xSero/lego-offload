@@ -13,6 +13,7 @@ choose the reply row from labels and the ledger (charging before anything is rea
 inputs -> run -> reply. Every decision is a core.py brick on the scopes hidden from the caller;
 verify/Lego.lean proves this composition for any policy.
 """
+import collections
 import fcntl
 import hmac
 import json
@@ -147,10 +148,12 @@ class Door:
         for s in set(self.scopes.values()):                    # hr~ is hr scrubbed, sealed is no scope
             if not re.fullmatch(r"[A-Za-z0-9_-]+", s) or s == core.SEALED:
                 raise core.Refused(f"scope name {s!r}: use letters, digits, - and _ only, and not {core.SEALED!r}")
+        disk = lambda d: d.partition(":")[2] if here(policy["nodes"].get(d.partition(":")[0], {})) else d  # noqa: E731
         for d in self.scopes:                                  # a listing of the outer one would show the inner
             if d.endswith("~") or "," in d:                    # taint ids: dirs joined by "," and "~" for scrubbed
                 raise core.Refused(f"private directory {d} may not end in ~ or hold a comma")
-            if any(d.startswith(o.rstrip("/") + "/") for o in [*self.public, *self.scopes] if o != d):
+            if any(inside(disk(d), disk(o)) or inside(disk(o), disk(d)) and o in self.public
+                   for o in [*self.public, *self.scopes] if o != d):   # local nodes' folders are on this disk too
                 raise core.Refused(f"private directory {d} is inside a public path or another private directory")
         if not set(self.scopes.values()) | {core.SEALED} <= self.nodes[self.host].trust:
             raise core.Refused("the host must be trusted with every scope: all bytes pass through it")
@@ -165,8 +168,7 @@ class Door:
         self.roots = [d.partition(":")[2] for d in self.scopes if d.startswith(self.host + ":")]   # private dirs here
         self.stops = self.roots + [d.partition(":")[2] for d in self.scopes if here(policy["nodes"].get(
             d.partition(":")[0], {}))] + [v[k] for v in policy["nodes"].values() if here(v) for k in ("out", "stage") if k in v]
-        mine = [str(self.state.resolve())] + self.roots + [
-            v[k] for v in policy["nodes"].values() if not v.get("ssh") for k in ("out", "stage") if k in v]
+        mine = [str(self.state.resolve())] + self.stops        # every private folder on this disk
         if any(inside(self.ws, canon(d)) or inside(canon(d), self.ws) for d in mine):
             raise core.Refused("the workspace overlaps a private directory or lego's own state: the room could read it")
         self.caller = caller                                    # the agent's own model
@@ -443,21 +445,20 @@ class Door:
                 "and keys replaced by stable placeholders such as [PERSON_3f9a])",
                 "nothing": f" ({len(found)} files, names hidden: pass the directory to offload with `returns`)"}[lvl])
             raw = lvl == "everything" and all(s in v.trust for n, v in self.nodes.items() if runnable(self.p["nodes"][n]))
-            new, shown_names = 0, []
+            new, named = 0, []
             for f in (found[:60] if raw else found) if lvl != "nothing" else []:
                 if f"{node}:{f}" not in self.learned and not raw and not self.vault.known(
                         f"{node}:{f}", transport.read(self.p["nodes"][node], f)):
                     new += 1                                   # not learned: its name may hold an identifier
                     continue
-                if hidden:                                     # a model sees nothing of it: not even names
-                    tag = hmac.new(bytes.fromhex(self.vault.v["key"]), f.encode(), "sha256").hexdigest()[:8]
-                    name = f"{shown}/#{tag}"
-                else:
-                    name = f"{shown}{f[len(root):] if raw else self.vault.scrub_name(f[len(root):], [s])}"
-                self.alias[name] = f"{node}:{f}"
+                tag = hmac.new(bytes.fromhex(self.vault.v["key"]), f.encode(), "sha256").hexdigest()[:8]
+                named.append((f"{shown}/#{tag}" if hidden else   # a model sees nothing of it: not even names
+                              f"{shown}{f[len(root):] if raw else self.vault.scrub_name(f[len(root):], [s])}", tag, f))
                 self.learned.add(f"{node}:{f}")
-                shown_names.append("    " + name)
-            lines += sorted(shown_names)[:60]                  # in their shown order: the raw order is private
+            twice = {n for n, c in collections.Counter(n for n, _, _ in named).items() if c > 1}
+            for name, tag, f in named:                         # two names scrubbed alike: each by its own tag,
+                self.alias[name + f"#{tag}" * (name in twice)] = f"{node}:{f}"   # never one by raw order
+            lines += sorted("    " + n + f"#{t}" * (n in twice) for n, t, _ in named)[:60]   # the raw order is private
             if new:
                 lines.append(f"    ({new} files added since lego started: restart lego to use them)")
         lines += [f"  {r}" for r in self.p.get("catalog", [])]
