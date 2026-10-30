@@ -8,6 +8,7 @@ import json
 import os
 import secrets
 import shlex
+import stat
 import subprocess
 import time
 
@@ -52,19 +53,59 @@ def _sh(node, cmd, data=None, timeout=60):
 
 
 def read(node, path, timeout=60):
-    return _sh(node, "cat " + shlex.quote(path), timeout=timeout)
+    if node.get("ssh"):
+        return _sh(node, "cat " + shlex.quote(path), timeout=timeout)
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)              # here: no process, and never waits on a FIFO
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RuntimeError("cat failed on local: not a regular file")
+        return b"".join(iter(lambda: os.read(fd, 1 << 20), b""))
+    finally:
+        os.close(fd)
 
 
 def files(node, root):
     """The regular files under a directory on a node, sorted."""
+    if not node.get("ssh"):                                     # here: what `find -type f` lists, no process
+        return sorted(f.decode(errors="replace") for f in _regular(os.fsencode(root)))
     out = _sh(node, f"find {shlex.quote(root)} -type f -print0 2>/dev/null; true", timeout=120)   # names may hold newlines
     return sorted(f for f in out.decode(errors="replace").split("\0") if f)
+
+
+def _regular(top):
+    """Regular files at or under `top`: links neither followed nor listed, unreadable folders skipped."""
+    try:
+        mode = os.lstat(top).st_mode
+    except OSError:
+        return []
+    if not stat.S_ISDIR(mode):
+        return [top] if stat.S_ISREG(mode) else []
+    out, todo = [], [top]
+    while todo:                                                # a loop, not recursion: any depth
+        try:
+            entries = list(os.scandir(todo.pop()))
+        except OSError:
+            continue
+        for e in entries:
+            try:
+                if e.is_dir(follow_symlinks=False):
+                    todo.append(e.path)
+                elif e.is_file(follow_symlinks=False):
+                    out.append(e.path)
+            except OSError:
+                pass
+    return out
 
 
 def put(node, dst_dir, name, data, timeout=60):
     """Write bytes into a new file on a node and return its path."""
     dst = f"{dst_dir}/{secrets.token_hex(8)}-{name}"
-    _sh(node, f"mkdir -p {shlex.quote(dst_dir)} && cat > {shlex.quote(dst)}", data=data, timeout=timeout)
+    if node.get("ssh"):
+        _sh(node, f"mkdir -p {shlex.quote(dst_dir)} && cat > {shlex.quote(dst)}", data=data, timeout=timeout)
+        return dst
+    os.makedirs(dst_dir, exist_ok=True)                          # here: no process
+    with open(dst, "xb") as f:
+        f.write(data)
     return dst
 
 
