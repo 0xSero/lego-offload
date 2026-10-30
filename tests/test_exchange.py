@@ -1093,6 +1093,29 @@ def test_twentyseventh_hunt_stays_fixed():
             j.join()
 
 
+def test_twentyeighth_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/more.csv").write_text("name\nMackenzie Brimstoke\nAnna Baker\nOliver Smith\nGrace Hopper\nAnna Good\n")
+        (t / "hr/notes.txt").write_text("QuellWater asked; ZorBina too. MacKenzie left. QuellWaterReport. BakerAnna, "
+                                         "SmithOliver, #TeamBaker, bAkEr, BAKERS, baker2, smith01, DrBaker, HopperLab, "
+                                         "smithFamily. The bank transfer was planned.\n")
+        (t / "hr/BakerAnna-review.md").write_text("x\n")
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2").mkdir()
+        view = cloud.read(str(t / "hr/notes.txt"))["text"] + cloud.read(".")["text"]
+        assert not re.search(r"(?i)quell|zor|kenzie|baker|smith|hopper|oliver|anna", view), view   # in every case
+        assert "transfer was planned" in view and "Report" in view               # and words stay words
+        pop.read(str(t / "hr/more.csv"))
+        GOT.clear()
+        pop.offload("Draft replies to Mr./Mrs. Good, Ms./Mr. Good and Prof.Dr. Good.", [], node="cloud")
+        assert "Good" not in GOT[-1][1], GOT[-1][1]                               # a joined title: still a title
+        for j in pop.jobs + cloud.jobs:
+            j.join()
+
+
 def test_own_precision():
     """Caller text: everyday and technical words stay as written; names, in any of the forms the hunts used, do not."""
     import scrub

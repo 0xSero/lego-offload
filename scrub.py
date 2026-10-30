@@ -402,15 +402,27 @@ class Vault:
         def only(r):                                           # dev[P]ops is [P]: letters left around a part
             return "".join(re.findall(r"\[[A-Z]+_[0-9a-f]+\]", r)) if r else None   # would spell it (tran+sfer)
 
-        def hump(h):                                           # transfer, planned, let: words, whatever they hold
-            return short.get(fold(h)) or (h if word(re.sub("['" + MARK + "]", "", h)) else
-                                           only(glue(re.sub("['" + MARK + "]", "", fold(h)))) or only(parts(h)) or h)
+        def known(h):                                          # Baker, bAkEr, BAKERS, QuellWater: a known part
+            b = re.sub("['" + MARK + "]", "", fold(h))         # first, even when it is also a word
+            for k, s in ((b, ""), (b[:-1], "s") if b.endswith("s") else (None, "")):
+                if k in short or k in folded:
+                    return (short.get(k) or folded[k]) + s
+            return None
 
-        def run(m):                                            # MeiNg, TransferMei: hump by hump; zOrBiNa,
-            w = m.group(0)                                     # O'brien: whole
-            if re.fullmatch(r"[A-Za-z][a-z]+(?:[A-Z][a-z]+)+", w):
-                return "".join(map(hump, re.split(r"(?<=[a-z])(?=[A-Z])", w)))
-            return hump(w)
+        def hump(h):                                           # transfer, planned, let: words, whatever they hold
+            return known(h) or (h if word(re.sub("['" + MARK + "]", "", h)) else
+                                only(glue(re.sub("['" + MARK + "]", "", fold(h)))) or only(parts(h)) or h)
+
+        def run(m):                                            # MeiNg, TransferMei: hump by hump, the longest
+            w = m.group(0)                                     # run of humps that is a known part first
+            if not re.fullmatch(r"[A-Za-z][a-z]+(?:[A-Z][a-z]+)+", w):
+                return hump(w)                                 # zOrBiNa, O'brien: whole
+            hs, out, i = re.split(r"(?<=[a-z])(?=[A-Z])", w), [], 0
+            while i < len(hs):
+                j = next((j for j in range(len(hs), i + 1, -1) if known("".join(hs[i:j]))), i + 1)
+                out.append(known("".join(hs[i:j])) if j > i + 1 else hump(hs[i]))
+                i = j
+            return "".join(out)
         return self._out(text, lambda seg: re.sub(WORD, run, seg), keep)
 
     def own(self, text, fresh, scopes=()):
@@ -439,6 +451,7 @@ class Vault:
         start = r"(?:^|(?<=[.!?:;]\s)|(?<=[.!?:;]\s\s)|(?<=\n)|(?<=[-*#>]\s))"   # where a capital means nothing
         def titled(before):                                    # J. Read, Det. Good, Dña. Best, prof. Read
             t = re.sub(r"^[^\w]+", "", (re.findall(r"(\S+)\s{1,2}$", before) or [""])[0])   # (Dr. Best), **Mr. Read**
+            t = re.split(r"[/&+,.]+(?=\w)", t)[-1]           # Mr./Mrs. Good, Prof.Dr. Best: the last title
             w = t.rstrip(".")
             return w.lower() in TITLES or t.endswith(".") and 0 < len(w) <= 5 and w.isalpha() and w[0].isupper() and (
                 len(w) == 1 or not w.isupper())                # but not an acronym: AWS. The end.
