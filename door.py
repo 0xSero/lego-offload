@@ -196,7 +196,7 @@ class Door:
             f = find(self.scopes[d]) if find else None
             if strict and not f:
                 raise core.Refused(f"{self.scopes[d]} is hidden from some model, but no local model sees it raw to find its names")
-            for path in transport.files(self.p["nodes"][node], root, limit=None):
+            for path in transport.files(self.p["nodes"][node], root):
                 self.learn(f"{node}:{path}", transport.read(self.p["nodes"][node], path, 600), self.scopes[d], f)
 
     def learn(self, ref, data, scope, f):
@@ -343,7 +343,7 @@ class Door:
         lines = []
         for d, s in self.scopes.items():
             node, _, root = d.partition(":")
-            lvl, found = self.level(s), transport.files(self.p["nodes"][node], root, limit=None)
+            lvl, found = self.level(s), transport.files(self.p["nodes"][node], root)
             shown = root if node == self.host else d
             lines.append(f"  {shown}  [{s}]  you see: {lvl}" + {
                 "everything": "", "scrubbed": " (same data; names, emails, phones, addresses, account numbers "
@@ -444,7 +444,7 @@ class Door:
                 continue
             if node == self.host and inside(path, self.ws) and not os.path.exists(path):   # its own files only
                 raise core.Refused(f"no file {r} in your workspace. read \".\" lists what you can name.")
-            found = [] if it.ref in self.refs or core.SEALED in it.scopes else transport.files(self.p["nodes"][node], path, None)
+            found = [] if it.ref in self.refs or core.SEALED in it.scopes else transport.files(self.p["nodes"][node], path)
             got = [self.item(f"{node}:{f}", internal=True) for f in found if inside(f, path)] if found and found != [path] else [it]
             out += [i for i in got if inside(i.ref.partition(":")[2], path)]   # swapped for a link meanwhile: dropped
         return out

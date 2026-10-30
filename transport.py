@@ -53,10 +53,10 @@ def read(node, path, timeout=60):
     return _sh(node, "cat " + shlex.quote(path), timeout=timeout)
 
 
-def files(node, root, limit=200):
-    """The regular files under a directory on a node: the first `limit` for a listing, all with None."""
+def files(node, root):
+    """The regular files under a directory on a node, sorted."""
     out = _sh(node, f"find {shlex.quote(root)} -type f -print0 2>/dev/null; true", timeout=120)   # names may hold newlines
-    return sorted(f for f in out.decode(errors="replace").split("\0") if f)[:limit]
+    return sorted(f for f in out.decode(errors="replace").split("\0") if f)
 
 
 def put(node, dst_dir, name, data, timeout=60):
@@ -147,8 +147,6 @@ def answer(output):
 def run_anthropic(node, files, task, schema, out_path, keep, timeout):
     """A cloud model as a node: the files were written to this host's stage, the call goes out from here
     with the user's Claude login. No output cap: max_tokens is the model's own maximum."""
-    import os
-    import time
     import urllib.request
     import route
     walk = lambda p: [] if os.path.islink(p) else sorted(  # noqa: E731
