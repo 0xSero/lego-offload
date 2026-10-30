@@ -53,9 +53,26 @@ def expand(p, state):
                        "model": {**model, **({"base_url": m["url"]} if "url" in m else {})}, **({"ssh": m["ssh"]} if m.get("ssh") else {})}
     full = {k: p[k] for k in ("workspace", "deadline", "job_timeout", "catalog") if k in p}
     return {"deadline": 30, "job_timeout": 300, **full, "host": host,
-            "public": [os.path.realpath(os.path.expanduser(f)) for f in p.get("public", [])],
-            "scopes": {f"{host}:{os.path.realpath(os.path.expanduser(d))}": s for s, d in p["private"].items()},
+            "public": [canon(f) for f in p.get("public", [])],
+            "scopes": {f"{host}:{canon(d)}": s for s, d in p["private"].items()},
             "allowance": {s: p.get("allowance", 16) for s in p["private"]}, "nodes": nodes}
+
+
+def canon(p):
+    """One spelling per file: links resolved, and on macOS the on-disk case without firmlinks, so two
+    spellings of a directory (Data and data, /System/Volumes/Data/...) are one directory everywhere."""
+    p = os.path.realpath(os.path.expanduser(p))
+    if not os.path.exists(p):
+        head, tail = os.path.split(p)
+        return p if head == p else os.path.join(canon(head), tail)
+    try:
+        fd = os.open(p, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return p
+    try:
+        return fcntl.fcntl(fd, fcntl.F_GETPATH, bytes(1024)).rstrip(b"\0").decode() if hasattr(fcntl, "F_GETPATH") else p
+    finally:
+        os.close(fd)
 
 
 def inside(a, b):
@@ -83,17 +100,19 @@ class Door:
         if policy["nodes"][self.host].get("model"):
             raise core.Refused("the host runs the room, so it cannot also run a model: the agent could time "
                                "the model's work through the shared CPU and GPU")
-        self.ws = os.path.realpath(policy.get("workspace") or "/nonexistent")
+        self.ws = canon(policy.get("workspace") or "/nonexistent")
         mine = [str(self.state.resolve())] + [d.partition(":")[2] for d in self.scopes if d.startswith(self.host + ":")] + [
             v[k] for v in policy["nodes"].values() if not v.get("ssh") for k in ("out", "stage") if k in v]
-        if any(inside(self.ws, os.path.realpath(d)) or inside(os.path.realpath(d), self.ws) for d in mine):
+        if any(inside(self.ws, canon(d)) or inside(canon(d), self.ws) for d in mine):
             raise core.Refused("the workspace overlaps a private directory or lego's own state: the room could read it")
         self.caller = caller                                    # the agent's own model
         self.me = self.nodes[caller] if caller else core.Node("", frozenset())
         self.seen = self.me.trust
+        self.raw = {s for s in self.seen if not s.endswith("~")}  # scopes the caller sees as written
         self.taint_file = Path(os.environ.get("LEGO_TAINT", "~/.lego/taint.json")).expanduser()  # per workspace,
         self.taint_file.parent.mkdir(parents=True, exist_ok=True)                            # every policy
-        self.context = set(self._taints().get(self.ws, []))     # scopes given to the caller (its workspace too)
+        self.context = {s for w, t in self._taints().items() if inside(canon(w), self.ws) or inside(self.ws, canon(w))
+                        for s in t}                            # given to the caller, its workspace, nested ones too
         self.vault = scrub.Vault(self.state / "vault.json")
         self.ledger_file = self.state / "ledger.json"
         if not self.ledger_file.exists():
@@ -176,7 +195,7 @@ class Door:
         if node not in self.nodes:
             raise core.Refused(f"unknown node in {asked}")
         if node == self.host:                                  # the agent can plant links in its workspace:
-            path = os.path.realpath(path)                      # label where the bytes really are, and pin them
+            path = canon(path)                                 # label where the bytes really are, and pin them
             if os.path.exists(path):
                 st = os.stat(path)
                 if inside(path, self.ws) and st.st_nlink > 1 and not os.path.isdir(path):
@@ -216,10 +235,16 @@ class Door:
                 os.close(fd)
         else:
             data = transport.read(self.p["nodes"][node], path, timeout)
-        tags = {s.rstrip("~") for s in item.scopes}
+        tags = self.tags(item)
         if scrubbed and not item.ref.startswith(f"{self.host}:{self.ws}/") and not self.vault.known(item.ref, data):
             raise core.Refused("a private file changed or appeared after lego started: restart lego to learn it")
         return self.vault.scrub(data.decode(errors="replace"), tags).encode() if scrubbed else data
+
+    def tags(self, item):
+        """Whose identifiers to replace in an item. In what the caller wrote, only those of scopes it sees
+        as written: replacing others would tell it which of its guesses the vault holds."""
+        tags = {s.rstrip("~") for s in item.scopes}
+        return tags & self.raw if item.node == self.host and inside(item.ref.partition(":")[2], self.ws) else tags
 
     def level(self, scope, node=None):
         t = (node or self.me).trust
@@ -330,7 +355,7 @@ class Door:
         given = [(g, s or s2) for (i, s), (g, s2) in zip(srcs, (self.give(i, self.nodes[n]) for i, _ in srcs))]
         everything = set(self.scopes.values()) <= self.nodes[n].trust
         scrub_task = given[-1][1] or not everything            # names it saw in this tool's text, too
-        task = self.vault.scrub(task, self.scopes.values()) if scrub_task else task
+        task = self.vault.scrub(task, self.raw & set(self.scopes.values())) if scrub_task else task
         with self.locks[n]:                                    # one decision at a time per node
             t0 = time.time()
             out, row, ledger, start, end = self.decide(n, [g for g, _ in given], returns, t0)
@@ -376,7 +401,7 @@ class Door:
             files = []
             for i, s in given:
                 name = i.ref.rsplit("/", 1)[-1]
-                name = name if everything and not s else self.vault.scrub_name(name, {x.rstrip("~") for x in i.scopes})
+                name = name if everything and not s else self.vault.scrub_name(name, self.tags(i))
                 files.append(i.ref.partition(":")[2] if i.node == n and not s else
                              transport.put(node, node["stage"], name, self.bytes_of(i, s, left()), left()))
             core.run([core.move(g, self.nodes[n]) for g, _ in given], self.nodes[n], out.ref)

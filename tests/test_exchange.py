@@ -184,8 +184,36 @@ def test_third_hunt_stays_fixed():
             j.join()
 
 
+def test_fourth_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        d = door.Door(p, t / "state", "cloud")
+        d.prepare(lambda scope: lambda text: [])
+        d.read(str(t / "hr/people.csv"))
+        GOT.clear()
+        guesses = "Zorbina Quellwater, Alice Smith, zq@corp.example, x@corp.example"
+        d.offload(guesses, [], node="cloud")                                  # the vault is no oracle
+        assert GOT[-1][1] == guesses, GOT[-1]
+        (t / "Data").mkdir()                                                  # one directory, two spellings
+        os.rename(t / "hr", t / "Data/hr")
+        q = door.expand({"private": {"hr": str(t / "Data/hr")}, "workspace": str(t / "data"), "models": {
+            "cloud": {"api": "anthropic", "model": "c", "sees": "nothing"}}}, t / "s2")
+        try:
+            door.Door(q, t / "s2", "cloud")
+            raise AssertionError("a case-variant workspace around hr was accepted")
+        except door.core.Refused:
+            pass
+        (t / "ws/sub").mkdir()
+        door.Door({**p, "workspace": str(t / "ws/sub")}, t / "s3", "pop").taint({"hr"})   # nested workspaces
+        assert "hr" in door.Door(p, t / "s4", "cloud").context
+        v = d.vault
+        v.learn("pop:/x/a.csv", b"name\nJos\xc3\xa9 N\xc3\xba\xc3\xb1ez\n", ["hr"], also="hr Varnella-Oxtrude.md")
+        out = v.scrub("zorbinaQuellwater_salary ZorbinaQuellwater2 quillonbrimstoke Jose Nunez", {"hr"})
+        assert not leaked(out) and "Jose" not in out and "Nunez" not in out, out
+
+
 if __name__ == "__main__":
     for f in (test_levels, test_forward_cloud_in_front, test_reverse_local_in_front, test_found_leaks_stay_fixed,
-              test_second_hunt_stays_fixed, test_third_hunt_stays_fixed):
+              test_second_hunt_stays_fixed, test_third_hunt_stays_fixed, test_fourth_hunt_stays_fixed):
         f()
         print("ok  ", f.__name__)

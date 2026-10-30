@@ -74,6 +74,12 @@ def flat(s):
     return re.sub(r"\s+", " ", s.strip())
 
 
+def fold(s):
+    """Per character: accents dropped, lower case. Same length as s, so offsets carry over."""
+    return "".join((("".join(c for c in unicodedata.normalize("NFKD", ch) if not unicodedata.combining(c)) or ch)
+                    .lower() + "_")[0] if ch.isalpha() else ch for ch in s)
+
+
 class Vault:
     def __init__(self, path):
         self.path = Path(path)
@@ -113,7 +119,8 @@ class Vault:
         if kind == "PERSON":                                           # "Alice" or "Nguyen" alone name her too
             for part in {p for sep in (r"[\s,]+", r"[\s,-]+") for p in re.split(sep, value)}:
                 part = part.strip(".'\"")
-                if len(part) < 2 or not part[0].isupper() or part == value and whole:
+                part = part[:1].upper() + part[1:] if part.islower() else part
+                if len(part) < 2 or part == value and whole:
                     continue
                 have = self.v["parts"].get(part)
                 if have is None:
@@ -132,6 +139,7 @@ class Vault:
         `find(text)` (a local model trusted with the file) lists as people, addresses and other ids.
         `also`: more text to search the same way, such as the file's path."""
         raw = norm(data.decode(errors="replace") if isinstance(data, bytes) else data)
+        also = re.sub(r"(?<=[a-z])(?=[A-Z])|[^\w]+|_+", " ", also)          # Varnella-Oxtrude, VarnellaOxtrude
         text = also + "\n" + raw if also else raw
         self.find_in(text, scopes)
         ext = name.rsplit(".", 1)[-1].lower()
@@ -147,9 +155,9 @@ class Vault:
                 for r in rows[1:] if kind else []:
                     if c < len(r) and r[c].strip():
                         self.add(r[c], kind, scopes)
-        low = flat(text).lower()
+        low = re.sub(r"[\W_]+", "", fold(text))
         for kind, value in (find(text) if find else []):
-            if flat(norm(value)).lower() in low:                  # only what is really in the file
+            if re.sub(r"[\W_]+", "", fold(norm(value))) in low:  # only what is really in the file, however spelt
                 self.add(value, kind, scopes)
         self.v["files"][name] = hashlib.sha256(raw.encode()).hexdigest()
         self.save()
@@ -158,43 +166,61 @@ class Vault:
         text = norm(data.decode(errors="replace") if isinstance(data, bytes) else data)
         return self.v["files"].get(name) == hashlib.sha256(text.encode()).hexdigest()
 
-    def _pattern(self):
+    def _pattern(self, scopes):
+        """Matchers for the identifiers of `scopes` only: whole ids, name forms, and folded name parts."""
+        key = frozenset(scopes)
         if self._re is None:
+            self._re = {}
+        if key not in self._re:
+            mine = lambda t: set(self.v["scope"].get(t, [])) & key  # noqa: E731
             alt = lambda keys: "|".join(re.escape(k).replace(r"\ ", r"\s+") for k in sorted(keys, key=len, reverse=True))  # noqa: E731
-            forms = {}
+            ids = {k: t for k, t in self.v["ids"].items() if mine(t)}
+            forms, folded = {}, {}
             for p, t in self.v["parts"].items():
-                for f in {p, p.upper(), p.title()} | ({p.lower()} if p.lower() not in COMMON else set()):
-                    forms.setdefault(f, t)
-            self.forms = forms
+                if mine(t):
+                    for f in {p, p.upper(), p.title()} | ({p.lower()} if p.lower() not in COMMON else set()):
+                        forms.setdefault(f, t)
+                    if len(p) >= 4 and p.lower() not in COMMON:
+                        folded.setdefault(fold(p), t)
             b, e = r"(?<![A-Za-z0-9])", r"(s?)(?![A-Za-z0-9])"     # '_' and '.' separate words; plurals too
-            self._re = [re.compile(b + "(" + alt(ks) + ")" + e, fl) for ks, fl in
-                        ((self.v["ids"], re.I), (forms, 0)) if ks]
-        return self._re
+            self._re[key] = (ids, forms, [re.compile(b + "(" + alt(ks) + ")" + e, fl) if ks else None for ks, fl in
+                                          ((ids, re.I), (forms, 0))],
+                             folded, re.compile("|".join(map(re.escape, sorted(folded, key=len, reverse=True)))) if folded else None)
+        return self._re[key]
 
     def scrub(self, text, scopes):
-        """The text with every known identifier replaced. Identifiers the files did not hold are found by
-        pattern and learned on the spot, tagged with the scopes of the text."""
-        text = norm(text)
+        """The text with every known identifier of `scopes` replaced, and only those: what is replaced
+        must not tell the reader which of its own guesses the vault holds. Identifiers the files did not
+        hold are found by pattern and learned on the spot, tagged with the scopes of the text."""
+        text, scopes = norm(text), set(scopes)
+        if not scopes:
+            return text
         n = len(self.v["ids"]) + len(self.v["parts"])
         self.find_in(text, scopes)
         if len(self.v["ids"]) + len(self.v["parts"]) != n:
             self.save()
-        for i, r in enumerate(self._pattern()):
-            look = self.v["ids"] if i == 0 else self.forms
-            text = r.sub(lambda m: (look[flat(m.group(1)).lower()] if i == 0 else look[m.group(1)]) + m.group(2), text)
+            self._re = None
+        ids, forms, res, folded, inner = self._pattern(scopes)
+        for look, r in zip((ids, forms), res):
+            if r:
+                text = r.sub(lambda m: (look[flat(m.group(1)).lower()] if look is ids else look[m.group(1)]) + m.group(2), text)
+        if not inner:
+            return text
 
-        def camel(m):                                          # zorbinaQuellwaterSalary, ZorbinaQuellwater
-            humps = re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])", m.group(0))
-            hits = [None if h.lower() in COMMON else self.forms.get(h.title()) for h in humps]
-            return "".join(t or h for h, t in zip(humps, hits)) if any(hits) else m.group(0)
-        return re.sub(r"(?<![\w\[])[A-Za-z]*[a-z][A-Z][A-Za-z]*(?![\w\]])", camel, text) if self.v["parts"] else text
+        def run(m):                                            # zorbinaQuellwater2, quillonbrimstoke, Jose for José
+            w = m.group(0)
+            return inner.sub(lambda h: folded[h.group(0)], fold(w)) if inner.search(fold(w)) else w
+        return re.sub(r"\[[A-Z]+_\d+\]|[^\W\d_]+", lambda m: m.group(0) if m.group(0)[0] == "[" else run(m), text)
 
     def scrub_name(self, name, scopes):
         """A file name: whole first (emails, numbers), then piece by piece, `alice_nguyen-review.md` ->
         `[PERSON_1]_[PERSON_1]-review.md`."""
         name = self.scrub(name, scopes)
-        lower = {k.lower(): t for k, t in self.forms.items()}
-        return re.sub(r"(?<!\[)[A-Za-z0-9]+(?![\w]*\])", lambda m: self.v["ids"].get(m.group(0).lower())
+        if not scopes:
+            return name
+        ids, forms = self._pattern(scopes)[:2]
+        lower = {k.lower(): t for k, t in forms.items()}
+        return re.sub(r"(?<!\[)[A-Za-z0-9]+(?![\w]*\])", lambda m: ids.get(m.group(0).lower())
                       or lower.get(m.group(0).lower()) or m.group(0), name)
 
     def unscrub(self, text, allowed):

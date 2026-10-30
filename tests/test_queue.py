@@ -2,6 +2,7 @@
 order they arrived, and a public reply's time does not depend on how long private work before
 it ran. Times are scaled down: deadline 0.5 s, job limit 1 s."""
 import sys
+import os
 import tempfile
 import threading
 import time
@@ -33,7 +34,10 @@ door.Door.bytes_of = lambda self, item, scrubbed, timeout=60: b""
 
 def trial(private_len):
     with tempfile.TemporaryDirectory() as tmp:
-        d = door.Door(POLICY, tmp)
+        ws = os.path.realpath(tmp) + "/ws"
+        os.mkdir(ws)
+        open(ws + "/a.py", "w").close()
+        d = door.Door({**POLICY, "workspace": ws, "public": [ws + "/a.py"]}, tmp + "/state")
         d.offload(str(private_len), ["mac:/data/hr/x.csv"])        # receipt: runs in the background
         t1 = time.time()
         r = d.offload("0.05", ["a.py"])                            # public: waits for the bound
@@ -57,7 +61,10 @@ def test_public_time_independent_of_private():
 def test_fifo_no_overlap():
     SPANS.clear()
     with tempfile.TemporaryDirectory() as tmp:
-        d = door.Door(POLICY, tmp)
+        ws = os.path.realpath(tmp) + "/ws"
+        os.mkdir(ws)
+        open(ws + "/a.py", "w").close()
+        d = door.Door({**POLICY, "workspace": ws, "public": [ws + "/a.py"]}, tmp + "/state")
         order = ["0.2", "0.1", "0.3", "0.05"]
         for task in order:
             d.offload(task, ["mac:/data/hr/x.csv"])

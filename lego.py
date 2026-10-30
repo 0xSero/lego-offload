@@ -65,11 +65,16 @@ def session(policy, state, agent, args, capture=None, timeout=None, tty=False):
     Path(state).mkdir(parents=True, exist_ok=True)
     locks = Path("~/.lego/locks").expanduser()
     locks.mkdir(parents=True, exist_ok=True)
-    ws_key = hashlib.sha256(os.path.realpath(policy["workspace"]).encode()).hexdigest()[:16]
-    held = [open(Path(state) / "session.lock", "w"), open(locks / f"{ws_key}.lock", "w")]
+    ws, up = policy["workspace"], []
+    while ws not in up:
+        up.append(ws)
+        ws = os.path.dirname(ws)
+    key = lambda d: locks / f"{hashlib.sha256(d.encode()).hexdigest()[:16]}.lock"  # noqa: E731
+    held = [(open(Path(state) / "session.lock", "w"), fcntl.LOCK_EX), (open(key(up[0]), "w"), fcntl.LOCK_EX)] + [
+        (open(key(d), "w"), fcntl.LOCK_SH) for d in up[1:]]
     try:                                                       # one door per node (its queue sees every job),
-        for lock in held:                                      # one session per workspace (its label is shared)
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        for lock, how in held:                                 # one session per workspace, nested ones included:
+            fcntl.flock(lock, how | fcntl.LOCK_NB)             # yours exclusive, every parent shared
     except BlockingIOError:
         raise SystemExit("lego: another session is using this policy's nodes or this workspace; run one at a time")
     d = door.Door(policy, state, me)
@@ -92,7 +97,7 @@ def session(policy, state, agent, args, capture=None, timeout=None, tty=False):
         shutil.rmtree(home, ignore_errors=True)
         for job in d.jobs:                                     # the node is busy until its jobs end
             job.join()
-        for lock in held:
+        for lock, _ in held:
             lock.close()
 
 
@@ -114,13 +119,12 @@ def main(argv):
     path, argv = find_policy(argv)
     state = path.resolve().parent / ".lego"
     policy = door.expand(json.loads(path.read_text()), state)
-    policy.setdefault("workspace", os.getcwd())
+    policy["workspace"] = door.canon(policy.get("workspace") or os.getcwd())   # one spelling, for room and labels
     cmd, args = argv[0], argv[1:]
     if cmd == "reset":
         d = door.Door(policy, state)
         if args == ["--workspace"]:                            # you vouch that it holds no private data now
-            t = d._taints()
-            t.pop(d.ws, None)
+            t = {w: v for w, v in d._taints().items() if not door.inside(door.canon(w), d.ws)}   # and folders in it
             return d.taint_file.write_text(json.dumps(t))
         return d.reset()
     if cmd == "app":
