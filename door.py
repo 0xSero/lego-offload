@@ -114,7 +114,8 @@ class Door:
         self.taint_file.parent.mkdir(parents=True, exist_ok=True)                            # every policy
         if any(inside(canon(d), self.ws) for d in (self.taint_file.parent, Path("~/.lego").expanduser())):
             raise core.Refused("the workspace holds lego's taints and locks: the room could rewrite them")
-        mine = [str(self.state.resolve())] + [d.partition(":")[2] for d in self.scopes if d.startswith(self.host + ":")] + [
+        self.roots = [d.partition(":")[2] for d in self.scopes if d.startswith(self.host + ":")]   # private dirs here
+        mine = [str(self.state.resolve())] + self.roots + [
             v[k] for v in policy["nodes"].values() if not v.get("ssh") for k in ("out", "stage") if k in v]
         if any(inside(self.ws, canon(d)) or inside(canon(d), self.ws) for d in mine):
             raise core.Refused("the workspace overlaps a private directory or lego's own state: the room could read it")
@@ -225,13 +226,13 @@ class Door:
         path = os.path.normpath(path)                          # ws/../keys is keys
         path = self.upto(path) if node == self.host else path  # /var is /private/var; nothing inside a scope followed
         fold = lambda p: unicodedata.normalize("NFC", p).casefold()  # noqa: E731   KEYS is keys
-        named = core.label(f"{node}:{fold(path)}", {fold(p) for p in self.public}, {fold(d): s for d, s in self.scopes.items()})
+        named = core.label(f"{node}:{fold(path)}", {fold(p) for p in self.public}, (fs := {fold(d): s for d, s in self.scopes.items()}))
         named = named if core.SEALED not in named and not (node == self.host and inside(fold(path), fold(self.ws))) else None
         if named and not internal and ref not in self.refs and not core.may_hold(self.me, named):
             if not core.may_hold(self.me, core.scrubbed(named)):  # a scope it sees nothing of: decided from the name,
-                self.deferred.add(f"{node}:{os.path.normpath(path)}")   # the files are found only inside the job
-                return core.Item(f"{node}:{os.path.normpath(path)}", named, node)
-            if f"{node}:{fold(path)}" not in {fold(d) for d in self.scopes}:
+                self.deferred.add(f"{node}:{path}")            # the files are found only inside the job
+                return core.Item(f"{node}:{path}", named, node)
+            if f"{node}:{fold(path)}" not in fs:
                 raise core.Refused(f"name files in {sorted(named)} by the names listed (read \".\" lists them)")
         if node == self.host:                                  # the agent can plant links in its workspace:
             path = canon(path)                                 # label where the bytes really are, and pin them
@@ -262,10 +263,9 @@ class Door:
     def upto(self, path):
         """The path with links resolved only until it reaches a private directory; the rest as written,
         so naming a path in a scope never looks at what lies inside it."""
-        roots = [d.partition(":")[2] for d in self.scopes if d.startswith(self.host + ":")]
         cur, rest, hops = "/", [p for p in path.split("/") if p], 0
         while rest:                                            # one component, one link hop at a time
-            if any(inside(cur, r) for r in roots):
+            if any(inside(cur, r) for r in self.roots):
                 if {".", ".."} & set(rest):
                     raise core.Refused("name files inside a private directory by plain paths, without . or ..")
                 return os.path.join(cur, *rest)
@@ -350,8 +350,7 @@ class Door:
                 "and keys replaced by stable placeholders such as [PERSON_3f9a])",
                 "nothing": f" ({len(found)} files, names hidden: pass the directory to offload with `returns`)"}[lvl])
             raw = lvl == "everything" and all(s in v.trust for n, v in self.nodes.items() if runnable(self.p["nodes"][n]))
-            new = 0
-            shown_names = []
+            new, shown_names = 0, []
             hidden = any(self.level(s, self.nodes[n]) == "nothing" for n, v in self.p["nodes"].items() if runnable(v))
             for f in (found[:60] if raw else found) if lvl != "nothing" else []:
                 if f"{node}:{f}" not in self.learned and not raw and not self.vault.known(
