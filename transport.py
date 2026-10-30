@@ -83,36 +83,49 @@ else:
 
 RUNNER = OPEN + r'''
 import json, signal, time, urllib.request
-job = json.loads(sys.stdin.read())
-signal.setitimer(signal.ITIMER_REAL, job["timeout"])     # the whole job, not each read: SIGALRM ends it
-docs = "".join("\n--- %s ---\n%s" % (f, b.decode(errors="replace")) for p in job["files"] for f, b in regular(p))
-body = {"model": job["model"]["model"], "messages": [
-    {"role": "system", "content": "You work for the owner of these files. Answer the task from the files given, or "
-     "from what you know if none are. Placeholders like [PERSON_3f9a] stand for real values: use them as the values, "
-     "copied exactly."},
-    {"role": "user", "content": job["task"] + "\n" + docs}]}
-if "temperature" in job:
-    body["temperature"] = job["temperature"]
-if job.get("salt"):
-    body["cache_salt"] = job["salt"]     # prompt cache shared only by jobs with the same scopes
-if job["schema"]:
-    body["response_format"] = {"type": "json_schema", "json_schema": {"name": "answer", "schema": job["schema"]}}
 t0 = time.time()
-req = urllib.request.Request(job["model"]["base_url"].rstrip("/") + "/chat/completions",
-                             data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
-resp = json.loads(urllib.request.urlopen(req, timeout=job["timeout"]).read())
-out = resp["choices"][0]["message"]["content"] or ""
-open(job["out"], "w").write(out)
-json.dump({"request": body, "response": resp}, open(job["out"] + ".trace.json", "w"))  # stays on the node
-res = {"took": time.time() - t0, "output": None if job["keep"] else out}
-if job.get("shaped"):                          # only the answer comes back, parsed here: its output's
-    try:                                       # length never crosses the wire
-        res["answer"] = json.loads(out.strip().removeprefix("```json").removesuffix("```"))["answer"]
-    except Exception:
-        res["answer"] = None
-    if len(json.dumps(res["answer"])) > 4096:
-        res["answer"] = None
-print(json.dumps(res).ljust(8192) if job["keep"] else json.dumps(res))   # a hidden job's reply: one size
+job = json.loads(sys.stdin.read())
+hold = job["keep"]                             # a hidden job: one reply of one size at one time, whatever happened
+def stop(*_):
+    raise TimeoutError
+signal.signal(signal.SIGALRM, stop)
+signal.setitimer(signal.ITIMER_REAL, job["timeout"] - (0.75 if hold else 0))   # the whole job, not each read
+res = {"took": 0.0, "output": None, **({"answer": None} if job.get("shaped") else {})}
+try:
+    docs = "".join("\n--- %s ---\n%s" % (f, b.decode(errors="replace")) for p in job["files"] for f, b in regular(p))
+    body = {"model": job["model"]["model"], "messages": [
+        {"role": "system", "content": "You work for the owner of these files. Answer the task from the files given, or "
+         "from what you know if none are. Placeholders like [PERSON_3f9a] stand for real values: use them as the values, "
+         "copied exactly."},
+        {"role": "user", "content": job["task"] + "\n" + docs}]}
+    if "temperature" in job:
+        body["temperature"] = job["temperature"]
+    if job.get("salt"):
+        body["cache_salt"] = job["salt"]       # prompt cache shared only by jobs with the same scopes
+    if job["schema"]:
+        body["response_format"] = {"type": "json_schema", "json_schema": {"name": "answer", "schema": job["schema"]}}
+    req = urllib.request.Request(job["model"]["base_url"].rstrip("/") + "/chat/completions",
+                                 data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+    resp = json.loads(urllib.request.urlopen(req, timeout=job["timeout"]).read())
+    out = resp["choices"][0]["message"]["content"] or ""
+    open(job["out"], "w").write(out)
+    json.dump({"request": body, "response": resp}, open(job["out"] + ".trace.json", "w"))  # stays on the node
+    res = {"took": time.time() - t0, "output": None if hold else out}
+    if job.get("shaped"):                      # only the answer comes back, parsed here
+        try:
+            res["answer"] = json.loads(out.strip().removeprefix("```json").removesuffix("```"))["answer"]
+        except Exception:
+            res["answer"] = None
+        if len(json.dumps(res["answer"])) > 4096:
+            res["answer"] = None
+except BaseException:
+    if not hold:
+        raise
+    res = {"took": 0.0, "output": None, **({"answer": None} if job.get("shaped") else {})}
+signal.setitimer(signal.ITIMER_REAL, 0)
+if hold:                                       # released at the end of its slot, never when the model is done
+    time.sleep(max(0.0, t0 + job["timeout"] - 0.5 - time.time()))
+print(json.dumps(res).ljust(8192) if hold else json.dumps(res))
 '''
 
 
@@ -254,23 +267,6 @@ def put(node, dst_dir, name, data, timeout=60):
     return dst
 
 
-def unlinked(node, root, path, timeout=60):
-    """Raises unless no part of `path` below `root` is a link: a job on a scope reads only that scope."""
-    rel = [p for p in os.path.relpath(path, root).split("/") if p not in ("", ".")]
-    if ".." in rel:
-        raise RuntimeError("outside its scope")
-    steps = [os.path.join(root, *rel[:k + 1]) for k in range(len(rel))]
-    if node.get("ssh"):
-        _sh(node, "for p in " + " ".join(map(shlex.quote, steps)) + '; do test -L "$p" && exit 1; done; exit 0', timeout=timeout)
-        return
-    for p in steps:
-        try:
-            if stat.S_ISLNK(os.lstat(p).st_mode):
-                raise RuntimeError("a link inside a scope")
-        except FileNotFoundError:
-            return
-
-
 def put_tree(node, dst_dir, src, timeout=60):
     """Copy a file or directory from this host into a new folder on a node, in one pipe: the door does
     the same work however many files it holds. Returns its path on the node."""
@@ -327,7 +323,8 @@ def run_job(node, files, task, schema, out_path, keep, timeout, salt=None, shape
     t0 = time.time()
     _sh(node, f"mkdir -p {shlex.quote(out_path.rsplit('/', 1)[0])}", timeout=timeout)
     job["timeout"] = max(0.05, timeout - (time.time() - t0))
-    raw = _sh(node, "python3 -c " + shlex.quote(RUNNER), data=json.dumps(job).encode(), timeout=job["timeout"])
+    raw = _sh(node, "python3 -c " + shlex.quote(RUNNER) + (" 2>/dev/null" if job["keep"] else ""),   # no traceback
+              data=json.dumps(job).encode(), timeout=job["timeout"] + 0.5)   # crosses; it ends half a second early
     return json.loads(raw)
 
 

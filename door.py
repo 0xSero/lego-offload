@@ -642,10 +642,11 @@ class Door:
             if any(s for _, s in given) or not everything:    # the real names' order is theirs too
                 given = secrets.SystemRandom().sample(given, len(given))
             for i, s in given:
-                if i.ref in self.deferred:                     # hidden: whole, as one pipe, walked on the node
+                if i.ref in self.deferred:                     # hidden: whole, as one pipe, walked on the node, where
+                                                               # a link on the way gives no file (keys/mirror -> hr);
+                                                               # nothing here looks inside it
                     root = next(r for d in self.scopes if (r := d.partition(":")[2]) and d.startswith(i.node + ":")
                                 and inside(i.ref.partition(":")[2], r))
-                    transport.unlinked(self.p["nodes"][i.node], root, i.ref.partition(":")[2], left())  # keys/mirror -> hr
                     if i.node != n and (n, root) not in self.staged:   # the whole scope, once per node: what
                         self.staged[n, root] = transport.put_tree(node, node["stage"], root, left())   # crosses
                     files.append(i.ref.partition(":")[2] if i.node == n else   # the wire is the same whatever

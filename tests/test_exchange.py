@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -21,9 +22,12 @@ import core  # noqa: E402
 GOT = []                                                       # (node, what the model was given)
 
 
+NODE = {}
+exec(transport.OPEN, NODE)                                                     # the node's own reader: no link followed
+
+
 def fake_job(node, files, task, returns, out, keep, timeout, salt=None, **_):     # the files are staged on this host
-    walk = [x for f in files for x in (sorted(p for p in Path(f).rglob("*") if p.is_file()) if Path(f).is_dir() else [Path(f)])]
-    seen = task + "".join(x.name + x.read_text() for x in walk)
+    seen = task + "".join(Path(f).name + b.decode() for p in files for f, b in NODE["regular"](p))
     GOT.append((node["model"]["model"], seen))
     reply = json.dumps({"answer": True}) if returns else "echo: " + seen
     return {"took": 0.0, "output": None if keep else reply}
@@ -526,6 +530,8 @@ def test_thirteenth_hunt_stays_fixed():
             answers.add(re.sub(r"probe_\S+", "", refusal(cloud, "read", path=f"probe_{name}")))
             answers.add(json.loads(refusal(cloud, "offload", task="x", inputs=[f"probe_{name}"])).get("row"))
         assert len(answers) == 2, answers                                       # one refusal, one receipt, for all
+        for j in cloud.jobs:
+            j.join()
         def relay(echo):
             d = door.Door({**p, "workspace": str(t / f"ws_{echo}")}, t / f"state_{echo}", "pop")
             (t / f"ws_{echo}").mkdir()
@@ -631,7 +637,8 @@ def test_seventeenth_hunt_stays_fixed():
         cloud.offload("Is Zorbina in this file?", [str(t / "keys/mirror/people.csv")], returns={"bool": True}, node="pop")
         for j in cloud.jobs:
             j.join()
-        assert not any(leaked(g) for _, g in GOT), GOT                          # a job on keys reads only keys
+        assert not any(leaked(g.removeprefix("Is Zorbina in this file?")) for _, g in GOT), GOT   # keys only: the
+                                                                                # link gives the node no file
         walk = transport.files
         transport.files = lambda node, root: walk(node, root) if "keys" not in root else 1 / 0   # keys: never walked
         try:
@@ -1164,6 +1171,52 @@ def test_twentyninth_hunt_stays_fixed():
             transport._sh = sh
             srv.shutdown()
         assert sizes[1] == sizes[3], sizes                                       # the reply: one size, whatever it held
+
+
+def test_thirtieth_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/more.csv").write_text("name\nAnna Brown\nFrank Quellwater\nGrace Hopper\nMei Park\n")
+        (t / "hr/access.log").write_text("disabled: abrown, frankq, graceh, mpark. TeamGrace, HopperGrace. The kingdom.\n")
+        os.symlink(t / "hr", t / "keys/link")
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2").mkdir()
+        view = cloud.read(str(t / "hr/access.log"))["text"]
+        assert not re.search(r"(?i)brown|frank|grace|park", view) and "kingdom" in view, view
+        for guess in ("prod.env/x", "nope/x", "link/x"):                       # a file, nothing, a link: a job
+            GOT.clear()                                                         # runs all the same
+            cloud.offload("x", [str(t / "keys" / guess)], node="pop")
+            for j in cloud.jobs:
+                j.join()
+            assert len(GOT) == 1, (guess, GOT)
+        class Model(http.server.BaseHTTPRequestHandler):                        # fast, slow or failing
+            def do_POST(self):
+                task = json.loads(self.rfile.read(int(self.headers["Content-Length"])))["messages"][1]["content"]
+                time.sleep(1.5 if "slow" in task else 0)
+                data = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+                self.send_response(500 if "fail" in task else 200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Model)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        sh, seen = transport._sh, []
+        transport._sh = lambda *a, **k: (lambda t0, b: seen.append((len(b), time.time() - t0)) or b)(time.time(), sh(*a, **k))
+        try:
+            node = {"model": {"model": "m", "base_url": f"http://127.0.0.1:{srv.server_address[1]}/v1"}}
+            for task in ("fast", "slow", "fail"):
+                real_run(node, [], task, None, str(t / f"out/{task}.txt"), keep=True, timeout=4)
+        finally:
+            transport._sh = sh
+            srv.shutdown()
+        replies = seen[1::2]                                                     # each job: mkdir, then the runner
+        assert len({n for n, _ in replies}) == 1, replies                       # one size, at one time, however the
+        assert max(s for _, s in replies) - min(s for _, s in replies) < 0.3, replies   # model did
 
 
 def test_own_precision():

@@ -320,11 +320,12 @@ class Vault:
             b, e = r"(?<![A-Za-z0-9])", r"(s?)(?![A-Za-z0-9])"     # '_' and '.' separate words; plurals too
             digits = t["digits"]
             short = {f: tok for p, tok in t["parts"].items() if len(p) < 4 and p.lower() not in COMMON for f in spellings(p)}
+            common = {f: tok for p, tok in t["parts"].items() if p.lower() in COMMON for f in spellings(p)}   # brown
             self._re[scope] = (joined, forms, [re.compile(b + "(" + alt(ks) + ")" + e, fl) if ks else None for ks, fl in
                                                ((t["ids"], re.I), (forms, 0))],
                                folded, re.compile("|".join(map(re.escape, sorted(folded, key=len, reverse=True)))) if folded else None,
                                (digits, re.compile(r"(?<!\d)(?:" + "|".join(SEP.join(d) for d in sorted(digits, key=len, reverse=True))
-                                                   + r")(?!\d)") if digits else None), short)
+                                                   + r")(?!\d)") if digits else None), short, common)
         return self._re[scope]
 
     def scrub(self, text, scopes, fresh=None):
@@ -355,7 +356,7 @@ class Vault:
         return outside(text, f, lambda t: self.v["scope"].get(t) in keep)
 
     def _scrub(self, text, scope, keep):
-        ids, forms, res, folded, inner, (digits, numbers), short = self._pattern(scope)
+        ids, forms, res, folded, inner, (digits, numbers), short, common = self._pattern(scope)
         def sub(r, look):                                      # Yilmaz for Yılmaz, Agent 47 for Agent47: the same
             return self._out(text, lambda seg: r.sub(lambda m: ((ids.get(key(m.group(1))) if look is ids else look.get(
                 re.sub(r"[\s_.\-]+", "", m.group(1)), look.get(m.group(1)))) or "[ID]") + m.group(2), seg), keep)
@@ -377,14 +378,15 @@ class Vault:
             return outside(inner.sub(lambda h: folded[h.group(0)], fold(w)), lambda seg: re.sub(   # zhangwei: wei too
                 r"[^\W\d_]+", lambda r: short.get(r.group(0)) or r.group(0), seg))
 
-        most = max(map(len, [*short, *folded]), default=0)
+        most = max(map(len, [*short, *folded, *common]), default=0)
+        glued = {**common, **short}                            # inside a word that is no word: abrown, frankq
 
         def chain(w):                                          # the longest run of known parts w starts with: two
             best, end = {0: []}, 0                             # or more, or one long one (liwei..., zhangwei...)
             for i in range(len(w)):
                 for j in range(i + 2, min(len(w), i + most) + 1) if i in best else ():
-                    if j not in best and (w[i:j] in short or w[i:j] in folded):
-                        best[j] = best[i] + [short.get(w[i:j]) or folded[w[i:j]]]
+                    if j not in best and (w[i:j] in glued or w[i:j] in folded):
+                        best[j] = best[i] + [glued.get(w[i:j]) or folded[w[i:j]]]
                         end = j if len(best[j]) > 1 or w[i:j] in folded else end
             return best[end], end
 
@@ -395,8 +397,8 @@ class Vault:
                 out, i, hit = (out + toks, i + n, True) if n else (out + [w[i]], i + 1, hit)
             if hit:
                 return "".join(out)
-            if len(w) > 2 and (w[1:] in short or w[:-1] in short):   # wli, kimj: an initial and a short name
-                return w[0] + short[w[1:]] if w[1:] in short else short[w[:-1]] + w[-1]
+            if len(w) > 2 and (w[1:] in glued or w[:-1] in glued):   # wli, abrown, frankq: an initial and a name
+                return w[0] + glued[w[1:]] if w[1:] in glued else glued[w[:-1]] + w[-1]
             return None
 
         def only(r):                                           # dev[P]ops is [P]: letters left around a part
@@ -420,7 +422,7 @@ class Vault:
             hs, out, i = re.split(r"(?<=[a-z])(?=[A-Z])", w), [], 0
             while i < len(hs):
                 j = next((j for j in range(len(hs), i + 1, -1) if known("".join(hs[i:j]))), i + 1)
-                out.append(known("".join(hs[i:j])) if j > i + 1 else hump(hs[i]))
+                out.append(known("".join(hs[i:j])) if j > i + 1 else forms.get(hs[i]) or hump(hs[i]))   # TeamGrace
                 i = j
             return "".join(out)
         return self._out(text, lambda seg: re.sub(WORD, run, seg), keep)
@@ -556,7 +558,7 @@ def word(w, doubled=True):
     plan too, which caller text does without (ritter is no word for it: rit is one)."""
     w = w.lower()
     return w in WORDS or any(w.endswith(a) and w[:-len(a)] + b in WORDS and len(w) - len(a) >= n for a, b, n in (
-        ("s", "", 1), ("ies", "y", 1), ("ed", "", 1), ("ed", "e", 1), ("ing", "", 1), ("ing", "e", 1), ("ly", "", 1),
+        ("s", "", 1), ("ies", "y", 1), ("ed", "", 1), ("ed", "e", 1), ("ing", "", 3), ("ing", "e", 1), ("ly", "", 1),
         ("er", "", 4), ("ers", "", 4), ("'s", "", 1), ("ising", "ize", 1), ("ise", "ize", 1), ("ised", "ize", 1),
         ("est", "", 1), ("iest", "y", 1))) or bool(re.search(r"(s|x|z|ch|sh|o)es$", w)) and w[:-2] in WORDS or \
         doubled and bool(d := re.fullmatch(r"(\w*([b-df-hj-np-tv-z]))\2(?:ed|ing|er|est)", w)) and d.group(1) in WORDS
