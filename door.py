@@ -186,14 +186,6 @@ class Door:
         self.log.write(json.dumps({"t": round(time.time(), 3), **kw}) + "\n")
         self.log.flush()
 
-    def _charge_plan(self, item, schema):
-        with self.ledger_file.open("r+") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
-            ledger = json.load(f)
-            row, new = core.release_plan(item, schema, ledger)
-            f.seek(0), f.truncate(), json.dump(new, f)
-        return row, new
-
     def hidden(self, scopes):
         return frozenset(scopes) - self.seen
 
@@ -307,9 +299,7 @@ class Door:
         waits (a FIFO is refused, not opened), and must be the very file that was labelled. `data`:
         bytes already read."""
         to, (node, _, path) = node or self.me, item.ref.partition(":")
-        if data is not None:
-            pass
-        elif node == self.host:
+        if data is None and node == self.host:
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             try:
                 st = os.fstat(fd)
@@ -320,7 +310,7 @@ class Door:
                 data = b"".join(iter(lambda: os.read(fd, 1 << 20), b""))
             finally:
                 os.close(fd)
-        else:
+        elif data is None:
             data = transport.read(self.p["nodes"][node], path, timeout)
         if scrubbed and not self.mine(item) and not self.vault.known(item.ref, data):
             raise core.Refused("a private file changed or appeared after lego started: restart lego to learn it")
@@ -330,13 +320,10 @@ class Door:
         if text is None:
             raise core.Refused("not a text file, so it cannot be scrubbed")
         try:
-            return self._scrubbed(item, text, to)
+            copy = self.mine(item) and self.vault.copy_of(text)  # a private file copied whole: scrubbed as one
+            return self.vault.scrub(text, self.tags(item, to), self.fresh if self.mine(item) and not copy else None).encode()
         except scrub.Unscrubbable:
             raise core.Refused("this file holds identifiers in an encoded form, so it cannot be scrubbed") from None
-
-    def _scrubbed(self, item, text, to):
-        copy = self.mine(item) and self.vault.copy_of(text)    # a private file copied whole: scrubbed as one
-        return self.vault.scrub(text, self.tags(item, to), self.fresh if self.mine(item) and not copy else None).encode()
 
     def tags(self, item, node=None):
         """Whose identifiers to replace in an item going to `node`. A private file: its own scopes the
@@ -440,7 +427,10 @@ class Door:
         need = frozenset().union(*(i.scopes for i in items))
         extra, start = core.queue(self.slots[n], t, self.hidden(need))
         out = core.Item(f"{n}:{self.p['nodes'][n]['out']}/{secrets.token_hex(16)}.txt", need | extra, n)
-        row, ledger = self._charge_plan(core.Item(out.ref, self.hidden(out.scopes), n), returns)
+        with self.ledger_file.open("r+") as f:                 # charged under the lock, before any byte is read
+            fcntl.flock(f, fcntl.LOCK_EX)
+            row, ledger = core.release_plan(core.Item(out.ref, self.hidden(out.scopes), n), returns, json.load(f))
+            f.seek(0), f.truncate(), json.dump(ledger, f)
         timeout = self.p["deadline"] if row == "shaped" else self.p.get("job_timeout", 600)
         if self.hidden(need):
             self.slots[n] = core.book(self.slots[n], t, self.hidden(out.scopes), timeout)
