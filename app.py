@@ -4,12 +4,11 @@
     lego app --demo [PORT]   with synthetic private data on gpu-box, deleted when the app stops
 
 It serves app.html and a small JSON API on 127.0.0.1 only. Each task is one unattended
-agent session in the room (agents.ONESHOT); the page polls the door's log, the ledger and
+agent session in its VM (agents.ONESHOT); the page polls the door's log, the ledger and
 the route's capture while it runs.
 """
 import json
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -33,7 +32,7 @@ class App:
         self.runs, self.lock = [], threading.Lock()
 
     def info(self):
-        installed = [a for a in agents.AGENTS if shutil.which({"cursor": "cursor-agent"}.get(a, a))]
+        installed = list(agents.AGENTS)                        # both live in the agent VM image
         return {"workspace": self.p["workspace"], "agents": installed, "deadline": self.p["deadline"],
                 "allowance": self.p.get("allowance", {}), "ledger": json.loads(self.door.ledger_file.read_text()),
                 "catalog": [{"ref": r, "scopes": sorted(self.door.item(r).scopes)} for r in self.p.get("catalog", [])],

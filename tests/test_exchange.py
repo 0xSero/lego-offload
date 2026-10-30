@@ -150,7 +150,7 @@ def test_found_leaks_stay_fixed():
         GOT.clear()
         fresh.offload("Write to Zorbina Quellwater", [], node="cloud")        # names typed from the listing
         assert not leaked(GOT[-1][1]), GOT[-1]
-        assert lego.caller(p, "codex") is None and lego.caller(p, "claude") == "cloud"
+        assert lego.caller(p, "claude") == "cloud"
 
 
 def test_second_hunt_stays_fixed():
@@ -1389,6 +1389,21 @@ def test_own_precision():
     for name in ("Zorbina", "quellwater", "Will", "May", "frank", "Strand", "Grace", "Friday", "January", "Jones",
                  "Mary", "Baker", "knapper", "barrio", "judge", "lord", "shadow", "sk", "pk", "aino", "repo", "auth"):
         assert name not in words, (name, out)
+
+
+def test_matrix_env_secrets():
+    """An env file's secrets are found by pattern alone, whatever the local model finds (matrix run 4: an AWS key id
+    of 21 characters reached a cloud that saw keys scrubbed)."""
+    import scrub
+    v = scrub.Vault(tempfile.mkdtemp() + "/v.json")
+    env = (b"STRIPE_KEY=sk_live_51CanaryQx9VtR2mLpZ7wYk3H8dFj4Ns6BeTu0Ga\nDB_PASSWORD=Wh1stl1ng-Gr0ve-Kanary-8812\n"
+           b"AWS_ACCESS_KEY_ID=AKIACANARY7Q2ZX4LMNOP\nAWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"
+           b"api_token: plain-looking-value\nSOME_CREDENTIALS=hunter2hunter2\n")
+    v.learn("prod.env", env, ["keys"], lambda text: [])
+    out = v.scrub(env.decode(), {"keys"})
+    for secret in ("sk_live_51Canary", "Wh1stl1ng", "AKIACANARY", "wJalrXUtn", "plain-looking", "hunter2"):
+        assert secret not in out, (secret, out)
+    assert "AWS_ACCESS_KEY_ID=" in out and "STRIPE_KEY=" in out, out
 
 
 def tmp_out():

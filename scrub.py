@@ -39,8 +39,9 @@ def _token(s):                                                 # random-looking:
 PATTERNS = {
     "KEY": (r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|\beyJ[\w-]+\.eyJ[\w-]+\.[\w-]*"
             r"|\b(?:[sr]k_(?:live|test)_|sk-(?:proj-|ant-)?|gh[pousr]_|github_pat_|xox[abposr]-|AIza|hf_|glpat-)[\w-]{16,}"
-            r"|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", None),
-    "SECRET": (r"(?i:passw(?:or)?d|pwd|secret|token|api[_-]?key|access[_-]?key)\s*[=:]\s*[\"']?([^\s\"']{6,})", None),
+            r"|\b(?:AKIA|ASIA)[0-9A-Z]{16,40}\b|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", None),
+    "SECRET": (r"(?i:passw(?:or)?d|pwd|secret|token|api[_-]?key|access[_-]?key|_key|credential)[\w-]{0,40}\s*[=:]\s*"
+               r"[\"']?([^\s\"']{6,})", None),            # AWS_ACCESS_KEY_ID=..., STRIPE_KEY=..., DB_PASSWORD=...
     "TOKEN": (r"(?<![\w+/=-])[A-Za-z0-9+/_-]{24,}={0,2}", _token),
     "EMAIL": (r"(?<![\w.+-])[\w.+-]{1,64}@[\w-]+(?:\.[\w-]+)+", None),
     "SSN": (r"\b\d{3}-\d{2}-\d{4}\b", None),
@@ -273,9 +274,7 @@ class Vault:
         """Record every identifier in one private file: patterns, identifier columns of a table, and what
         `find(text)` (a local model trusted with the file) lists as people, addresses and other ids.
         `also`: more text to search the same way, such as the file's path."""
-        raw = norm(text_of(data) or "")
-        split = re.sub(r"(?<=[a-z])(?=[A-Z])|[^\w]+|_+", " ", also)         # Varnella-Oxtrude, VarnellaOxtrude
-        text = also + "\n" + split + "\n" + raw if also else raw          # and as written: a.b@corp.example.md
+        raw, text = searched(data, also)
         self.find_in(text, scopes)
         ext = name.rsplit(".", 1)[-1].lower()
         if ext in ("csv", "tsv"):
@@ -558,6 +557,13 @@ try:                                                            # first names, f
     # macOS's list: not names, or (LOW) names only when capitalised
 except OSError:
     FIRST = set()
+
+
+def searched(data, also=""):
+    """(the file's text, what is searched for identifiers: its path too, split and as written)."""
+    raw = norm(text_of(data) or "")
+    split = re.sub(r"(?<=[a-z])(?=[A-Z])|[^\w]+|_+", " ", also)             # Varnella-Oxtrude, VarnellaOxtrude
+    return raw, also + "\n" + split + "\n" + raw if also else raw          # and as written: a.b@corp.example.md
 
 
 def word(w, doubled=True):

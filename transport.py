@@ -354,10 +354,10 @@ def _find(node, text):
             "street addresses, usernames and handles, personal ID or account numbers. Copy each exactly as written. "
             "Not company names, job titles, places alone, dates or amounts.\n\n" + text)
     out = f"{node['stage']}/ids-{secrets.token_hex(8)}.txt"
-    job = {"files": [], "task": task, "schema": IDS, "model": node["model"], "out": out, "keep": False, "timeout": 600,
-           "temperature": 0}
+    job = {"files": [], "task": task, "schema": IDS, "model": node["model"], "out": out, "keep": False, "timeout": 3600,
+           "temperature": 0}                                   # before the agent starts: a busy model may take long
     _sh(node, f"mkdir -p {shlex.quote(node['stage'])}")
-    r = json.loads(_sh(node, "python3 -c " + shlex.quote(RUNNER), data=json.dumps(job).encode(), timeout=630))
+    r = json.loads(_sh(node, "python3 -c " + shlex.quote(RUNNER), data=json.dumps(job).encode(), timeout=3630))
     try:
         return [(i["kind"], i["text"]) for i in json.loads(r["output"])["identifiers"]]
     except (ValueError, KeyError, TypeError):

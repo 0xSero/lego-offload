@@ -1,16 +1,19 @@
-"""lego: run a cloud coding agent in the room, with private work offloaded through the door.
+"""lego: run a coding agent in a fresh VM that holds nothing of this Mac but its workspace. Its one
+way to your private data is the lego tool, which answers from this Mac at each model's level.
 
-usage: lego [--policy FILE] AGENT [agent args...]   AGENT: claude | codex | cursor | cline | omp
+usage: lego [--policy FILE] AGENT [agent args...]   AGENT: claude | omp
        lego [--policy FILE] reset                  refill every scope's allowance
        lego [--policy FILE] reset --workspace      forget what earlier sessions put in the workspace
+       lego [--policy FILE] show REF               print a job's output (a ref the agent got back)
        lego [--policy FILE] app [PORT]             the web app (default port 8470)
        lego app --demo [PORT]                      the web app on synthetic data (gpu-box)
 
-  lego claude --dangerously-skip-permissions
-  lego codex --dangerously-bypass-approvals-and-sandbox
-  lego cursor -p "How many people earn over 100k?" --yolo
-  lego cline -y "Is the STRIPE_KEY a live key?"
+  lego claude --dangerously-skip-permissions       Claude in front, the local model as its helper
+  lego claude -p "How many people earn over 100k?"
   lego omp                                         a local model in front, the cloud as its helper
+
+Run it from the folder the agent should work in (its workspace). The VM image is built the first
+time (Apple `container`, a few minutes).
 
 The policy (default: $LEGO_POLICY, ./lego.json, then ~/.lego/policy.json; see
 examples/policy.json) names the private directories and, for each model, what it sees of
@@ -23,6 +26,7 @@ import fcntl
 import hashlib
 import json
 import os
+import secrets
 import shutil
 import sys
 import tempfile
@@ -30,9 +34,9 @@ from pathlib import Path
 
 import agents
 import door
-import room
 import route
 import transport
+import vm
 
 
 def caller(policy, agent):
@@ -57,7 +61,7 @@ def finder(policy):
 
 
 def session(policy, state, agent, args, capture=None, timeout=None, tty=False):
-    """One agent session: start the door and the route on free ports, run the agent in the room, stop both."""
+    """One agent session: start the door and the route on free ports, run the agent in its VM, stop both."""
     adapter, upstream = agents.AGENTS[agent]
     me = caller(policy, agent)
     model = policy["nodes"][me]["model"] if me else None
@@ -82,15 +86,17 @@ def session(policy, state, agent, args, capture=None, timeout=None, tty=False):
         raise SystemExit(f"lego: the workspace holds {sorted(d.held - d.seen)} data from an earlier session, which "
                          f"{agent}'s model may not see. Use another workspace, or clear it and run: lego reset --workspace")
     d.prepare(finder(policy), strict=True)
-    ds, rs = door.serve(d, 0), route.serve(0, upstream, capture=capture)
+    vm.ensure_image()
+    gw, net = vm.network()
+    key = secrets.token_hex(24)                                # the session's key to the route and the door
+    ds = door.serve(d, 0, bind="0.0.0.0", token=key, peers=net)
+    rs = route.serve(0, upstream, capture=capture, bind="0.0.0.0", token=key, peers=net)
     dp, rp = ds.server_address[1], rs.server_address[1]
     home = tempfile.mkdtemp(prefix="lego-home-")
     try:
-        argv, install, env = adapter(home, f"http://127.0.0.1:{rp}", f"http://127.0.0.1:{dp}/mcp", list(args),
-                                     policy["workspace"], **({"model": model} if agent == "omp" else {}))
-        lib = env.pop("LEGO_LIB_DIR", None)
-        return room.launch(argv[0], argv[1:], policy["workspace"], home, rp, dp, env=env, timeout=timeout,
-                           agent_dir=install, tty=tty, lib_dir=lib)
+        argv, env = adapter(home, f"http://{gw}:{rp}", f"http://{gw}:{dp}/mcp", list(args), policy["workspace"],
+                            key=key, **({"model": model} if agent == "omp" else {}))
+        return vm.launch(argv, policy["workspace"], home, env=env, timeout=timeout, tty=tty)
     finally:
         for s in (ds, rs):
             s.shutdown(), s.server_close()
@@ -119,7 +125,7 @@ def main(argv):
     path, argv = find_policy(argv)
     state = path.resolve().parent / ".lego"
     policy = door.expand(json.loads(path.read_text()), state)
-    policy["workspace"] = door.canon(policy.get("workspace") or os.getcwd())   # one spelling, for room and labels
+    policy["workspace"] = door.canon(policy.get("workspace") or os.getcwd())   # one spelling, for the VM and labels
     cmd, args = argv[0], argv[1:]
     if cmd == "reset":
         d = door.Door(policy, state)
@@ -127,6 +133,11 @@ def main(argv):
             t = {w: v for w, v in d._taints().items() if not door.inside(door.canon(w.lstrip("@")), d.ws)}   # and folders in it
             return d.taint_file.write_text(json.dumps(t))
         return d.reset()
+    if cmd == "show":                                          # for you, on the Mac: never for the agent
+        node, _, out = (args[0] if args else "").partition(":")
+        if node not in policy["nodes"] or not out.startswith(policy["nodes"][node].get("out", "\0") + "/") or "/.." in out:
+            sys.exit("lego: show takes a job's ref, such as pop:/srv/lego/out/<id>.txt")
+        return sys.stdout.write(transport.read(policy["nodes"][node], out).decode(errors="replace"))
     if cmd == "app":
         import app
         return app.main(policy, state, int(args[0]) if args else 8470)

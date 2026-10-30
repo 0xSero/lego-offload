@@ -1,12 +1,10 @@
-"""Every agent adapter, without a model: what the room would hold.
+"""Every agent adapter, without a model: what the agent VM would hold.
 
 For each installed agent: build its throwaway HOME exactly as `lego AGENT` does, then check
 (1) no real credential appears in any file, the argv or the environment (values are compared
 in memory, never printed), (2) its model traffic is pointed at the route and its tools at the
 door, and nothing else.
 """
-import json
-import os
 import shutil
 import sys
 import tempfile
@@ -27,15 +25,6 @@ def secrets_on_host():
             out += [v.split(" ", 1)[-1] for v in auth().values()]
         except Exception:                                   # that agent is not logged in here
             continue
-    try:
-        out.append(json.load(open(os.path.expanduser("~/.codex/auth.json")))["tokens"]["refresh_token"])
-    except (OSError, KeyError):
-        pass
-    for svc in ("cursor-access-token", "cursor-refresh-token"):
-        try:
-            out.append(route.keychain(svc).rsplit(".", 1)[-1])   # the JWT signature is the secret part
-        except Exception:
-            pass
     return [s for s in out if len(s) >= 16]
 
 
@@ -46,7 +35,7 @@ def main():
         home = tempfile.mkdtemp(prefix="lego-test-home-")
         try:
             try:
-                argv, install, env = adapter(home, ROUTE, DOOR, ["-p", "hi"], home, **(
+                argv, env = adapter(home, ROUTE, DOOR, ["-p", "hi"], home, **(
                     {"model": {"model": "local-model", "url": "http://127.0.0.1:9/v1"}} if upstream is None else {}))
             except SystemExit as e:
                 print(f"skip {name:7} {e}")
@@ -56,10 +45,10 @@ def main():
             leaked = sum(s in blob for s in found)
             routed = ROUTE in blob
             tools = DOOR in blob
-            other = [u for u in ("api.anthropic.com", "chatgpt.com", "api2.cursor.sh", "openrouter.ai") if u in blob]
-            ok = not leaked and routed and tools and not other and os.path.isdir(install)
+            other = [u for u in ("api.anthropic.com",) if u in blob]
+            ok = not leaked and routed and tools and not other
             failed += not ok
-            print(f"{'ok  ' if ok else 'FAIL'} {name:7} credentials in room: {leaked}, model via route: {routed}, "
+            print(f"{'ok  ' if ok else 'FAIL'} {name:7} credentials in VM: {leaked}, model via route: {routed}, "
                   f"tools via door: {tools}, upstream hosts named: {other or 'none'}, upstream {upstream or 'local model'}")
         finally:
             shutil.rmtree(home, ignore_errors=True)

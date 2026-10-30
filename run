@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# One command for everything: ./run            (or ./run unit|verify|sim|e2e|twoway)
-# unit    brick tests, the sandbox room probed with plain binaries, and every agent adapter
-#         checked for credentials and wiring (no model)
+# One command for everything: ./run            (or ./run unit|verify|sim|vm|matrix|twoway)
+# unit    brick tests, and every agent adapter checked for credentials and wiring (no model)
 # verify  Lean: the leak bound proved for any policy, any number of calls, any adaptive
 #         strategy (timing, queue, cache included), then the Lean model run against the door
 # sim     Bend Monte Carlo of a working day (budget x reply time), checked bit-exact
-# e2e     real models: private data on gpu-box; Claude Code, Codex, Cursor and Cline each in
-#         the sandbox room
+# vm      every connection of a session, from inside the agent VM, and what it cannot reach
+# matrix  every policy level both ways, real agents in VMs and real models, canaries scanned
 # twoway  real models both ways: Claude Code (Sonnet 5.5) in front, then omp on DeepSeek in front,
 #         canaries scanned in everything that reached the cloud
 set -euo pipefail
@@ -21,7 +20,6 @@ unit() {
   t 300 python3 tests/test_core.py
   t 300 python3 tests/test_queue.py
   t 300 python3 tests/test_exchange.py
-  t 300 python3 tests/test_room.py
   t 300 python3 tests/test_agents.py | tee results/agents.txt
 }
 
@@ -42,11 +40,12 @@ sim() {
   (cd verify && t 900 python3 sim_ref.py runs/sim_raw.txt ../results/sim.json)
 }
 
-e2e() { step "e2e: real models, every agent"; t 14400 python3 tests/e2e.py results/e2e.json; }
+vmcheck() { step "vm: connections from inside the agent VM"; t 1800 python3 tests/vmcheck.py; }
+matrix() { step "matrix: every policy level, both ways"; t 14400 python3 tests/matrix.py results/matrix.json; }
 twoway() { step "twoway: Claude Code in front, then omp on the local model in front"; t 7200 python3 tests/twoway.py results/twoway.json; }
 
 case "${1:-all}" in
-  unit) unit ;; verify) verify ;; sim) sim ;; e2e) e2e ;; twoway) twoway ;;
-  all) unit; verify; sim; e2e; twoway; t 60 python3 tests/report.py > results/REPORT.md; cat results/REPORT.md ;;
-  *) echo "usage: ./run [all|unit|verify|sim|e2e|twoway]"; exit 2 ;;
+  unit) unit ;; verify) verify ;; sim) sim ;; vm) vmcheck ;; matrix) matrix ;; twoway) twoway ;;
+  all) unit; verify; vmcheck; matrix ;;
+  *) echo "usage: ./run [all|unit|verify|sim|vm|matrix|twoway]"; exit 2 ;;
 esac

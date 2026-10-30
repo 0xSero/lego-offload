@@ -14,8 +14,10 @@ inputs -> run -> reply. Every decision is a core.py brick on the scopes hidden f
 verify/Lego.lean proves this composition for any policy.
 """
 import collections
+import concurrent.futures
 import fcntl
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -269,7 +271,7 @@ class Door:
         """Before anything crosses: learn the identifiers of every private file some model may not see raw.
         find(scope) gives a function that lists identifiers with a local model trusted with that scope."""
         scrubbed = {s for n, v in self.p["nodes"].items() if runnable(v) for s in set(self.scopes.values()) - self.nodes[n].trust}
-        datas = {}
+        datas, todo = {}, []
         for d in [d for d, s in self.scopes.items() if s in scrubbed]:
             node, _, root = d.partition(":")
             f = find(self.scopes[d]) if find else None
@@ -277,9 +279,16 @@ class Door:
                 raise core.Refused(f"{self.scopes[d]} is hidden from some model, but no local model sees it raw to find its names")
             for path in self.found.setdefault(d, transport.files(self.p["nodes"][node], root)):
                 data = datas[f"{node}:{path}"] = transport.read(self.p["nodes"][node], path, 600)
-                self.learn(f"{node}:{path}", data, self.scopes[d], f)
+                if not self.vault.known(f"{node}:{path}", data):
+                    todo.append((f"{node}:{path}", data, self.scopes[d], f))
                 if self.p["nodes"][node].get("ssh"):           # on another machine: its scrubbed views are made
                     self.snap[f"{node}:{path}"] = data         # from this copy, so nothing crosses at request time
+        also = [self.rel(ref, scope) for ref, _, scope, _ in todo]
+        with concurrent.futures.ThreadPoolExecutor(8) as pool:   # the local model reads every file at once
+            ids = list(pool.map(lambda job: job[0][3](scrub.searched(job[0][1], job[1])[1]) if job[0][3] else [],
+                                zip(todo, also)))
+        for (ref, data, scope, _), rel, got in zip(todo, also, ids):
+            self.vault.learn(ref, data, [scope], lambda text, got=got: got, also=rel)
         for d in self.scopes:                                  # a listing never walks a scope at request time:
             node, _, root = d.partition(":")                   # its time would show the hidden folders
             self.found.setdefault(d, transport.files(self.p["nodes"][node], root))
@@ -291,14 +300,13 @@ class Door:
                 self.views[f"{node}:{path}", self.scopes[d]] = self.view(datas[f"{node}:{path}"], {self.scopes[d]})
                 self.names[path, self.scopes[d]] = self.vault.scrub_name(path[len(root):], [self.scopes[d]])
 
-    def learn(self, ref, data, scope, f):
-        """A private file's identifiers, its path's included (a name can sit in a file name only). Only
-        here, before the agent starts: learning later would take time that depends on the file."""
-        if not self.vault.known(ref, data):
-            node, _, path = ref.partition(":")
-            rel = path[len(max((d.partition(":")[2] for d, s in self.scopes.items() if s == scope and d.startswith(node + ":")
-                                and inside(path, d.partition(":")[2])), key=len, default="")):]
-            self.vault.learn(ref, data, [scope], f, also=rel.replace("/", "\n"))
+    def rel(self, ref, scope):
+        """A private file's path within its scope, one part a line: searched for names too (a name can sit
+        in a file name only). Files are learned only in prepare(), before the agent starts: learning later
+        would take time that depends on the file."""
+        node, _, path = ref.partition(":")
+        return path[len(max((d.partition(":")[2] for d, s in self.scopes.items() if s == scope and d.startswith(node + ":")
+                             and inside(path, d.partition(":")[2])), key=len, default="")):].replace("/", "\n")
 
     # ---------- the exchange ----------
     def item(self, ref, internal=False):
@@ -804,7 +812,9 @@ class Door:
         return {"jsonrpc": "2.0", "id": mid, "result": res}
 
 
-def serve(door, port):
+def serve(door, port, bind="127.0.0.1", token=None, peers=None):
+    """MCP over HTTP. With `token`, only a request with `Authorization: Bearer <token>` from an address in
+    `peers` (the VM network) is answered."""
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
@@ -814,6 +824,12 @@ def serve(door, port):
             self.end_headers()
 
         def do_POST(self):
+            if token and (self.headers.get("Authorization") != f"Bearer {token}" or peers is not None and
+                          ipaddress.ip_address(self.client_address[0]) not in peers):
+                self.send_response(403)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             try:
                 msg = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
                 reply = door.rpc(msg) if isinstance(msg, dict) else None
@@ -829,6 +845,6 @@ def serve(door, port):
             except (BrokenPipeError, ConnectionResetError):   # the agent left before its reply
                 pass
 
-    srv = ThreadingHTTPServer(("127.0.0.1", port), H)
+    srv = ThreadingHTTPServer((bind, port), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv

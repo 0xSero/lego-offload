@@ -102,4 +102,4 @@ It shows what fraction of private questions get answered at each allowance and d
   - The cache salt is collision-free per scope set.
   - Time is in whole units, and the door's own work takes no time.
 - **Side channels outside the model.** The model covers reply rows, values and times as the door sends them. It does not cover the node's power draw or network traffic seen by third parties.
-- **Adapters are tested, not proved.** The sandbox room, route, agent adapters, door I/O and ssh transport are covered by `../tests/test_room.py`, `../tests/test_agents.py`, `../tests/test_queue.py` and the real-model run in `../tests/e2e.py`.
+- **Adapters are tested, not proved.** The agent VM, route, agent adapters, door I/O and ssh transport are covered by `../tests/vmcheck.py`, `../tests/test_agents.py`, `../tests/test_queue.py` and the real-model runs in `../tests/matrix.py` and `../tests/twoway.py`.

@@ -3,6 +3,7 @@ whatever key the agent sends, injects the real credential (which never enters th
 streams the reply back, and can capture every exchange (request and streamed reply) for leak scans and traces.
 """
 import http.client
+import ipaddress
 import json
 import os
 import re
@@ -29,27 +30,8 @@ def claude_auth():
     return {"Authorization": "Bearer " + json.loads(raw)["claudeAiOauth"]["accessToken"]}
 
 
-def codex_auth():
-    """Codex's ChatGPT login (~/.codex/auth.json)."""
-    t = json.load(open(os.path.expanduser("~/.codex/auth.json")))["tokens"]
-    return {"Authorization": "Bearer " + t["access_token"], "chatgpt-account-id": t["account_id"]}
-
-
-def cursor_auth():
-    """Cursor's CLI login, from the macOS keychain."""
-    return {"Authorization": "Bearer " + keychain("cursor-access-token")}
-
-
-def openrouter_auth():
-    """The OpenRouter key Cline is configured with."""
-    return {"Authorization": "Bearer " + json.load(open(os.path.expanduser("~/.cline/data/secrets.json")))["openRouterApiKey"]}
-
-
 # name: (host, path prefixes the agent may use, headers carrying the real credential, anthropic-beta to add)
-UPSTREAMS = {"anthropic": ("api.anthropic.com", ("/v1/",), claude_auth, "oauth-2025-04-20"),
-             "codex": ("chatgpt.com", ("/backend-api/codex/",), codex_auth, None),
-             "cursor": ("api2.cursor.sh", ("/",), cursor_auth, None),
-             "openrouter": ("openrouter.ai", ("/api/v1/",), openrouter_auth, None)}
+UPSTREAMS = {"anthropic": ("api.anthropic.com", ("/v1/",), claude_auth, "oauth-2025-04-20")}
 
 
 def gunzip(b):
@@ -80,8 +62,9 @@ def readable(raw, enc=""):
     return b"\n".join([raw] + [bytes.fromhex(h.decode()) for h in HEX.findall(raw)])
 
 
-def serve(port, upstream="anthropic", capture=None):
-    """`upstream`: a name in UPSTREAMS, or the http:// URL of a local model (no credential)."""
+def serve(port, upstream="anthropic", capture=None, bind="127.0.0.1", token=None, peers=None):
+    """`upstream`: a name in UPSTREAMS, or the http:// URL of a local model (no credential). With
+    `token`, only a request carrying it (as its api key) from an address in `peers` is forwarded."""
     local = upstream.startswith("http://")
     host, prefixes, secret, beta = (upstream[7:].split("/")[0], ("/",), dict, None) if local else UPSTREAMS[upstream]
     conn_for = lambda: (http.client.HTTPConnection(host, timeout=600) if local else                # noqa: E731
@@ -95,6 +78,8 @@ def serve(port, upstream="anthropic", capture=None):
             return cache["v"]
 
     creds()                                            # fail fast; the value is never printed
+    allowed = lambda h: token is None or any(token in v for v in h.headers.values()) and (   # noqa: E731
+        peers is None or ipaddress.ip_address(h.client_address[0]) in peers)
 
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -113,7 +98,7 @@ def serve(port, upstream="anthropic", capture=None):
 
         def forward(self):
             body = self.body()
-            if not self.path.startswith(prefixes):
+            if not self.path.startswith(prefixes) or not allowed(self):
                 self.send_response(404), self.send_header("content-length", "0"), self.end_headers()
                 return
             real = creds()
@@ -172,6 +157,6 @@ def serve(port, upstream="anthropic", capture=None):
             if not isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError)):
                 super().handle_error(request, addr)
 
-    srv = Server(("127.0.0.1", port), H)
+    srv = Server((bind, port), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     return srv
