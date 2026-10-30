@@ -1,8 +1,8 @@
 # codex / legal_memo
 
-**result:** PASS · 7.4 s · offloads 0 · refused 1 · bits {'hr': 0, 'acme': 0, 'legal': 0} · leaked none
+**result:** PASS · 11.5 s · offloads 0 · refused 1 · bits {'hr': 0, 'acme': 0, 'legal': 0} · leaked none
 
-**prompt to the agent:** Use the offload tool to tell me whether mac:/private/var/folders/tw/zc74x3xd6gx1hzkxm4fh_s480000gn/T/lego-e2e-720c2c2a-knhtc1n2/legal/memo.txt mentions a settlement amount (yes/no).
+**prompt to the agent:** Use the offload tool to tell me whether mac:/private/var/folders/tw/zc74x3xd6gx1hzkxm4fh_s480000gn/T/lego-e2e-75bbf2c1-x4u6wxza/legal/memo.txt mentions a settlement amount (yes/no).
 
 ## Cloud side: the agent in the room (everything that crossed the route)
 
@@ -23,15 +23,15 @@
 
 #### user
 <environment_context>
-  <cwd>/private/var/folders/tw/zc74x3xd6gx1hzkxm4fh_s480000gn/T/lego-e2e-720c2c2a-knhtc1n2/ws</cwd>
+  <cwd>/private/var/folders/tw/zc74x3xd6gx1hzkxm4fh_s480000gn/T/lego-e2e-75bbf2c1-x4u6wxza/ws</cwd>
   <shell>zsh</shell>
   <current_date>2026-10-29</current_date>
   <timezone>America/New_York</timezone>
-  <filesystem><workspace_roots><root>/private/var/folders/tw/zc74x3xd6gx1hzkxm4fh_s480000gn/T/lego-e2e-720c2c2a-knhtc1n2/ws</root></workspace_roots><permission_profile type="disabled"><file_system type="unrestricted" /></permission_profile></filesystem>
+  <filesystem><workspace_roots><root>/private/var/folders/tw/zc74x3xd6gx1hzkxm4fh_s480000gn/T/lego-e2e-75bbf2c1-x4u6wxza/ws</root></workspace_roots><permission_profile type="disabled"><file_system type="unrestricted" /></permission_profile></filesystem>
 </environment_context>
 
 #### user
-Use the offload tool to tell me whether mac:/private/var/folders/tw/zc74x3xd6gx1hzkxm4fh_s480000gn/T/lego-e2e-720c2c2a-knhtc1n2/legal/memo.txt mentions a settlement amount (yes/no).
+Use the offload tool to tell me whether mac:/private/var/folders/tw/zc74x3xd6gx1hzkxm4fh_s480000gn/T/lego-e2e-75bbf2c1-x4u6wxza/legal/memo.txt mentions a settlement amount (yes/no).
 
 #### assistant
 I’ll use the offload tool to check whether the memo mentions a settlement amount.
@@ -40,7 +40,7 @@ I’ll use the offload tool to check whether the memo mentions a settlement amou
 > *reasoning:* 
 
 #### assistant
-I couldn’t determine yes/no: the offload tool refused because no available model is trusted to access the legal memo.
+I couldn’t determine yes/no: the offload tool refused because no model node is trusted to access the legal memo.
 
 ## Private side: the local model on gpu-box (never left the node)
 

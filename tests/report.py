@@ -56,6 +56,25 @@ if c := load("cache.json"):
                   [[x["variant"], x["traces"], x["violating"], x["first_violation"], x["max_classes"], x["bend_matches"]]
                    for x in c]), ""]
 
+if lean := load("lean.txt"):
+    axioms = [l.strip() for l in lean.splitlines() if "depends on axioms" in l]
+    out += ["## Unbounded proof (Lean 4, `verify/Lego.lean`)\n",
+            "Any policy, any number of nodes, scopes and calls, any adaptive strategy; reply times, the node "
+            "queue and the prompt cache in the model. Each theorem and the axioms its proof uses:\n",
+            "```", *axioms, "```", next((l for l in lean.splitlines() if l.startswith("LEAN")), ""), ""]
+if twin := load("twin.txt"):
+    out += ["## Lean model vs the real door\n", "```", twin.strip().splitlines()[-1], "```", ""]
+for when in ("before", "after"):
+    if c := load(f"contention_{when}.json"):
+        if when == "before":
+            out += ["## Contention on one model node (gpu-box)\n",
+                    "A free private job runs long or short depending on a salary; 3 s later a public job is sent "
+                    "to the same node. Public reply times by side:\n"]
+        rows = [[s, " ".join(f"{x:.2f}" for x in sorted(r["public_seconds"] for r in c["rows"] if r["salary"] == s)),
+                 c["mean_full_seconds"][s]] for s in ("above", "below")]
+        out += [f"**{'before' if when == 'before' else 'with'} the queue** ({c['date']}, {c['trials_per_side']} trials per side)\n",
+                table(["salary", "public reply (s), sorted", "mean"], rows), ""]
+
 if s := load("sim.json"):
     out += ["## Simulation (8192 sessions per cell, 40 offloads each)\n",
             table(["bits/session", "reply time", "answered", "late (UNKNOWN)", "over budget", "mean extra wait"],

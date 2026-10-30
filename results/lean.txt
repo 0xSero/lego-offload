@@ -1,0 +1,13 @@
+'Lego.leak_bound' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Lego.sealed_hidden' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Lego.held_trusted' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Lego.budget' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Lego.reply_times' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Lego.Mutants.mutant_queue' depends on axioms: [propext]
+'Lego.Mutants.mutant_salt' depends on axioms: [propext]
+'Lego.Mutants.mutant_clock' depends on axioms: [propext]
+'Lego.Mutants.mutant_charge' depends on axioms: [propext]
+'Lego.Mutants.mutant_shape' depends on axioms: [propext]
+'Lego.Mutants.mutant_run' depends on axioms: [propext]
+'Lego.Mutants.mutant_move' depends on axioms: [propext]
+LEAN PROOFS CHECK (12 theorems, no sorry)

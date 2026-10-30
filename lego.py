@@ -15,6 +15,7 @@ examples/policy.json) names the nodes, what each may hold, which directories car
 scope, the public files, the allowances and the reply deadline. The agent's workspace is
 the policy's "workspace", or the current directory. State lives in .lego/ next to the policy.
 """
+import fcntl
 import json
 import os
 import shutil
@@ -31,6 +32,12 @@ import route
 def session(policy, state, agent, args, capture=None, timeout=None, tty=False):
     """One agent session: start the door and the route on free ports, run the agent in the room, stop both."""
     adapter, upstream = agents.AGENTS[agent]
+    Path(state).mkdir(parents=True, exist_ok=True)
+    lock = open(Path(state) / "session.lock", "w")             # one door per node: its queue must see every job
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit("lego: another session is using this policy's nodes; run one at a time")
     d = door.Door(policy, state)
     ds, rs = door.serve(d, 0), route.serve(0, upstream, capture=capture)
     dp, rp = ds.server_address[1], rs.server_address[1]
@@ -43,6 +50,9 @@ def session(policy, state, agent, args, capture=None, timeout=None, tty=False):
         for s in (ds, rs):
             s.shutdown(), s.server_close()
         shutil.rmtree(home, ignore_errors=True)
+        for job in d.jobs:                                     # the node is busy until its jobs end
+            job.join()
+        lock.close()
 
 
 def find_policy(argv):

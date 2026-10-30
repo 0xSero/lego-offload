@@ -3,7 +3,9 @@
 # unit    brick tests, the sandbox room probed with plain binaries, and every agent adapter
 #         checked for credentials and wiring (no model)
 # verify  Bend: brick laws, every-topology model check, 16-world leak counting, the shared
-#         prompt cache; each cross-checked against a Python twin that drives the real core.py
+#         prompt cache; each cross-checked against a Python twin that drives the real core.py.
+#         Lean: the leak bound proved for any policy, any number of calls, any adaptive
+#         strategy (timing, queue, cache included), then the Lean model run against the door
 # sim     Bend Monte Carlo of a working day (budget x reply time), checked bit-exact
 # e2e     real models: private data on gpu-box; Claude Code, Codex, Cursor and Cline each in
 #         the sandbox room
@@ -17,6 +19,7 @@ step() { printf '\n== %s\n' "$*"; }
 unit() {
   step unit
   t 300 python3 tests/test_core.py | tee results/unit.txt
+  t 300 python3 tests/test_queue.py | tee -a results/unit.txt
   t 300 python3 tests/test_room.py | tee results/room.txt
   t 300 python3 tests/test_agents.py | tee results/agents.txt
 }
@@ -43,6 +46,14 @@ verify() {
   step "verify: shared prompt cache over 8 secret worlds, every 4-job attack"
   for k in 1 2 3; do t 600 bend run-c verify/cache.bend -s > $R/cache_raw.txt; grep -q '^Result.*\$' $R/cache_raw.txt || break; done
   (cd verify && t 600 python3 cache_ref.py runs/cache_raw.txt ../results/cache.json) | tee results/cache.txt
+  step "verify: Lean proofs for any number of nodes, scopes and steps, against any adaptive strategy"
+  { cat verify/Lego.lean; for th in leak_bound sealed_hidden held_trusted budget reply_times $(sed -n \
+      's/^theorem \(mutant_[a-z]*\).*/Mutants.\1/p' verify/Lego.lean); do echo "#print axioms Lego.$th"; done; } > $R/LegoAxioms.lean
+  t 900 "$HOME/.elan/bin/lean" $R/LegoAxioms.lean | tee results/lean.txt
+  if grep -q sorryAx results/lean.txt; then echo "LEAN: a proof is missing"; exit 1; fi
+  echo "LEAN PROOFS CHECK ($(grep -c 'depends on axioms' results/lean.txt) theorems, no sorry)" | tee -a results/lean.txt
+  step "verify: Lean model vs the real door on random call sequences"
+  t 1800 python3 verify/twin.py 2000 0 | tee results/twin.txt
 }
 
 sim() {

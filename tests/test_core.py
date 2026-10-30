@@ -6,7 +6,7 @@ import random
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import core  # noqa: E402
-from core import SEALED, UNKNOWN, Item, Node, Refused  # noqa: E402
+from core import SEALED, UNKNOWN, Item, Node, Refused, book, queue  # noqa: E402
 
 PUBLIC = {"/w/README.md", "/w/src/app.py"}
 SCOPES = {"/w/hr": "a", "/w/acme": "b", "/w/acme/hr": "a"}
@@ -127,6 +127,27 @@ def test_clock_and_release():
         assert core.deliver("receipt", v, None, took, 30) == (0, core.RECEIPT)
         t, reply = core.deliver("shaped", v, {"bool": True}, took, 30)
         assert t == 30 and reply in (True, UNKNOWN)
+
+
+def test_queue():
+    hr, legal = frozenset({"hr"}), frozenset({"legal"})
+    slot = (0, frozenset())
+    assert queue(slot, 5, frozenset()) == (frozenset(), 5)            # idle node: public runs at once
+    slot = book(slot, 10, hr, 30)
+    assert slot == (40, hr)
+    assert queue(slot, 20, frozenset()) == (frozenset(), 40)          # public waits until surely idle
+    assert queue(slot, 20, legal) == (hr, 20)                         # private may be timed against hr: carries it
+    assert queue(slot, 40, legal) == (frozenset(), 40)                # bound passed: nothing carried
+    assert book(slot, 20, hr | legal, 30) == (70, hr | legal)         # starts no later than the old bound
+    import random
+    rng = random.Random(0)
+    for _ in range(20000):                                            # the slot's bound never moves backwards
+        slot, t = (rng.randint(0, 100), frozenset(rng.sample(["a", "b"], rng.randint(0, 2)))), rng.randint(0, 120)
+        s = frozenset(rng.sample(["a", "b"], rng.randint(1, 2)))
+        extra, start = queue(slot, t, s)
+        assert start == t and extra <= slot[1] and book(slot, t, s | extra, rng.randint(0, 50))[0] >= slot[0]
+        extra, start = queue(slot, t, frozenset())
+        assert extra == frozenset() and start >= slot[0] and start >= t
 
 
 if __name__ == "__main__":

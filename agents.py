@@ -33,7 +33,8 @@ def claude(home, route_url, door_url, args):
     b = _bin("claude")
     return [b, *args, "--mcp-config", str(mcp), "--strict-mcp-config", *extra], os.path.dirname(b), {
         "ANTHROPIC_BASE_URL": route_url, "ANTHROPIC_API_KEY": PLACEHOLDER, "CLAUDE_CODE_TMPDIR": f"{home}/tmp",
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_AUTOUPDATER": "1"}
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_AUTOUPDATER": "1",
+        "MCP_TOOL_TIMEOUT": "900000"}
 
 
 def codex(home, route_url, door_url, args):
@@ -44,7 +45,8 @@ def codex(home, route_url, door_url, args):
     Path(home, ".codex/config.toml").write_text("\n".join(keep + [
         'model_provider = "lego"', 'sandbox_mode = "danger-full-access"   # the room is the sandbox', "",
         "[model_providers.lego]", 'name = "lego route"', f'base_url = "{route_url}/backend-api/codex"',
-        'wire_api = "responses"', 'env_key = "LEGO_ROUTE_KEY"', "", "[mcp_servers.lego]", f'url = "{door_url}"']) + "\n")
+        'wire_api = "responses"', 'env_key = "LEGO_ROUTE_KEY"', "", "[mcp_servers.lego]", f'url = "{door_url}"',
+        "tool_timeout_sec = 900   # a public job may wait for the node's queue"]) + "\n")
     b = _bin("codex")
     return [b, *args], os.path.dirname(os.path.dirname(b)), {"CODEX_HOME": f"{home}/.codex", "LEGO_ROUTE_KEY": PLACEHOLDER}
 
@@ -77,7 +79,7 @@ def cline(home, route_url, door_url, args):
             "provider": "openai-compatible", "apiKey": PLACEHOLDER, "model": model, "baseUrl": f"{route_url}/api/v1"},
             "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()), "tokenSource": "manual"}}}))
     (s / "cline_mcp_settings.json").write_text(json.dumps(
-        {"mcpServers": {"lego": {"transport": {"type": "streamableHttp", "url": door_url}}}}))
+        {"mcpServers": {"lego": {"transport": {"type": "streamableHttp", "url": door_url}, "timeout": 900}}}))
     return [b, *args], os.path.dirname(b), {"CLINE_NO_AUTO_UPDATE": "1", "DISABLE_AUTOUPDATER": "1", "DISABLE_UPDATES": "1"}
 
 

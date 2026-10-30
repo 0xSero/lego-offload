@@ -1,8 +1,8 @@
 # cline / notice
 
-**result:** PASS · 47.6 s · offloads 1 · refused 0 · bits {'hr': 0, 'acme': 9, 'legal': 0} · leaked none
+**result:** PASS · 46.4 s · offloads 1 · refused 0 · bits {'hr': 0, 'acme': 9, 'legal': 0} · leaked none
 
-**prompt to the agent:** Using the offload tool, find how many days of notice pop:/tmp/lego-e2e-720c2c2a/acme/contract.md requires for termination. End your reply with just the number.
+**prompt to the agent:** Using the offload tool, find how many days of notice pop:/tmp/lego-e2e-75bbf2c1/acme/contract.md requires for termination. End your reply with just the number.
 
 ## Cloud side: the agent in the room (everything that crossed the route)
 
@@ -13,7 +13,7 @@
 [harness context, 4019 chars, not shown]
 
 #### user
-Using the offload tool, find how many days of notice pop:/tmp/lego-e2e-720c2c2a/acme/contract.md requires for termination. End your reply with just the number.
+Using the offload tool, find how many days of notice pop:/tmp/lego-e2e-75bbf2c1/acme/contract.md requires for termination. End your reply with just the number.
 
 #### user
 [SYSTEM] This run is not complete until you call one of these terminal completion tools: submit_and_exit. Continue working if requirements are not met. If the task is complete, call the appropriate terminal completion tool now.
@@ -21,13 +21,13 @@ Using the offload tool, find how many days of notice pop:/tmp/lego-e2e-720c2c2a/
 #### assistant
 **→ lego__offload**
 ```json
-{"task":"Find how many days of notice the contract requires for termination. Read the file pop:/tmp/lego-e2e-720c2c2a/acme/contract.md and extract the number of days of notice required.","inputs":["pop:/tmp/lego-e2e-720c2c2a/acme/contract.md"],"returns":{"int":[0,365]}}
+{"task":"Find how many days of notice the contract requires for termination. Read pop:/tmp/lego-e2e-75bbf2c1/acme/contract.md and return the number of days.","inputs":["pop:/tmp/lego-e2e-75bbf2c1/acme/contract.md"],"returns":{"int":[1,365]}}
 ```
 
 #### tool
 **← result**
 ```
-{"content":[{"type":"text","text":"{\"row\": \"shaped\", \"answer\": 95, \"ref\": \"pop:/tmp/lego-e2e-720c2c2a/out/4e968b9e66df1510cf326b89b552a062.txt\", \"allowance_left\": {\"hr\": 16, \"acme\": 7, \"legal\": 16}}"}]}
+{"content":[{"type":"text","text":"{\"row\": \"shaped\", \"answer\": 95, \"ref\": \"pop:/tmp/lego-e2e-75bbf2c1/out/38442f3163e8fb5eb7308848e9e410e4.txt\", \"allowance_left\": {\"hr\": 16, \"acme\": 7, \"legal\": 16}}"}]}
 ```
 
 #### assistant
@@ -37,11 +37,9 @@ Using the offload tool, find how many days of notice pop:/tmp/lego-e2e-720c2c2a/
 [SYSTEM] This run is not complete until you call one of these terminal completion tools: submit_and_exit. Continue working if requirements are not met. If the task is complete, call the appropriate terminal completion tool now.
 
 #### assistant
-The task is complete. I found that the contract requires 95 days of notice for termination.
-
 **→ submit_and_exit**
 ```json
-{"summary": "Used the offload tool to read pop:/tmp/lego-e2e-720c2c2a/acme/contract.md and extract the number of days of notice required for termination. The contract requires 95 days of notice.", "verified": true}
+{"summary": "Using the offload tool, I queried pop:/tmp/lego-e2e-75bbf2c1/acme/contract.md for the termination notice period. The result returned 95 days.", "verified": true}
 ```
 
 ## Private side: the local model on gpu-box (never left the node)
@@ -50,10 +48,10 @@ The task is complete. I found that the contract requires 95 days of notice for t
 
 **prompt** (`deepseek-v4.1-flash-1017`, constrained: True)
 ```
-Find how many days of notice the contract requires for termination. Read the file pop:/tmp/lego-e2e-720c2c2a/acme/contract.md and extract the number of days of notice required.
+Find how many days of notice the contract requires for termination. Read pop:/tmp/lego-e2e-75bbf2c1/acme/contract.md and return the number of days.
 
---- /tmp/lego-e2e-720c2c2a/acme/contract.md ---
-# Master services agreement ACME-E3294E
+--- /tmp/lego-e2e-75bbf2c1/acme/contract.md ---
+# Master services agreement ACME-E81449
 Acme Corp and the Company.
 
 ## 9. Termination
@@ -63,7 +61,7 @@ Either party may terminate on ninety-five (95) days written notice.
 
 **reasoning**
 ```
-We need answer. Need read file given. Extract days notice. It says ninety-five (95) days. Need answer concise.
+We need answer from file. Need find days notice termination. It says ninety-five (95) days. Return number of days. Need concise.
 ```
 
 **output** (stays on the node; the cloud gets only the reply row)
@@ -71,4 +69,4 @@ We need answer. Need read file given. Extract days notice. It says ninety-five (
 {"answer": 95}
 ```
 
-usage: {'prompt_tokens': 154, 'total_tokens': 188, 'completion_tokens': 34, 'prompt_tokens_details': {'cached_tokens': 0, 'created_cache_tokens': 128, 'multimodal_tokens': None}, 'completion_tokens_details': {'reasoning_tokens': 26}}
+usage: {'prompt_tokens': 148, 'total_tokens': 185, 'completion_tokens': 37, 'prompt_tokens_details': {'cached_tokens': 0, 'created_cache_tokens': 128, 'multimodal_tokens': None}, 'completion_tokens_details': {'reasoning_tokens': 29}}

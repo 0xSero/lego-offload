@@ -3,3 +3,7 @@ ok test_move_and_run
 ok test_shape
 ok test_charge
 ok test_clock_and_release
+ok test_queue
+ok test_public_time_independent_of_private
+ok test_fifo_no_overlap
+ok test_shaped_after_private_carries_its_scopes

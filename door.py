@@ -1,9 +1,11 @@
 """Door: the one tool the cloud agent gets, `offload`, served as MCP over HTTP.
 
 Fixed order for every call: label the inputs -> pick a node trusted with all of them ->
-choose the reply row from labels and the ledger (charging before anything is read) ->
-move the inputs -> run the job on that node -> deliver (full / shaped at the deadline /
-receipt). Every decision is a core.py brick; this file only does I/O.
+queue on that node (one job at a time; a private job also carries the scopes of a job it may
+be timed against; a public job waits until the node is surely idle) -> choose the reply row
+from labels and the ledger (charging before anything is read) -> move the inputs -> run the
+job -> deliver (full / shaped at the deadline / receipt). Every decision is a core.py brick;
+this file only does I/O. verify/Lego.lean proves this composition for any policy.
 """
 import fcntl
 import json
@@ -43,6 +45,12 @@ class Door:
         if not self.ledger_file.exists():
             self.reset()
         self.refs = {}                                          # result ref -> scopes
+        names = list(policy["nodes"])                           # the queue on each node (core.queue)
+        self.slots = {n: (0.0, frozenset()) for n in names}
+        self.locks = {n: threading.Lock() for n in names}
+        self.turns = {n: threading.Condition() for n in names}
+        self.tickets, self.serving = dict.fromkeys(names, 0), dict.fromkeys(names, 0)
+        self.jobs = []                                          # background jobs, joined when a session ends
         self.salt_key = secrets.token_hex(16)                   # see core.salt
         self.log = (self.state / "door.jsonl").open("a")
 
@@ -81,49 +89,70 @@ class Door:
                 return n
         raise core.Refused(f"no node with a model is trusted with {sorted(need)}")
 
+    def decide(self, n, items, returns, t):
+        """Everything about a call, from labels, the ledger and node n's queue at time t, before any
+        byte is read: the output item, its row, the ledger after, the job's time limit and its start."""
+        need = frozenset().union(*(i.scopes for i in items))
+        extra, start = core.queue(self.slots[n], t, need)
+        out = core.Item(f"{n}:{self.p['nodes'][n]['out']}/{secrets.token_hex(16)}.txt", need | extra, n)
+        row, ledger = self._charge_plan(out, returns)
+        timeout = self.p["deadline"] if row == "shaped" else self.p.get("job_timeout", 600)
+        if need:
+            self.slots[n] = core.book(self.slots[n], t, out.scopes, timeout)
+        return out, row, ledger, timeout, start
+
     def offload(self, task, inputs=(), returns=None, node=None):
-        t0 = time.time()
         items = [self.item(r) for r in inputs]
         n = self.pick_node(items, node)
-        out_ref = f"{n}:{self.p['nodes'][n]['out']}/{secrets.token_hex(16)}.txt"
-        out = core.Item(out_ref, frozenset().union(*(i.scopes for i in items)), n)
         if returns is not None:
             core.bits(returns)                                 # refuse bad shapes before anything else
-        row, ledger = self._charge_plan(out, returns)
-        self._note(op="offload", node=n, ref=out_ref, inputs=[i.ref for i in items], scopes=sorted(out.scopes),
-                   row=row, bits=core.bits(returns) if row == "shaped" else 0)
-        moved = [core.move(i, self.nodes[n]) for i in items]
-        self.refs[out_ref] = out.scopes
+        with self.locks[n]:                                    # one decision at a time per node
+            t0 = time.time()
+            out, row, ledger, timeout, start = self.decide(n, items, returns, t0)
+            self._note(op="offload", node=n, ref=out.ref, inputs=[i.ref for i in items], scopes=sorted(out.scopes),
+                       row=row, bits=core.bits(returns) if row == "shaped" else 0)
+            moved = [core.move(i, self.nodes[n]) for i in items]
+            self.refs[out.ref] = out.scopes
+            turn, self.tickets[n] = self.tickets[n], self.tickets[n] + 1
+            if row == "full":                                  # public: the node is surely idle from `start`
+                time.sleep(max(0.0, start - time.time()))
+                r = self._run(n, items, moved, task, returns, out, row, timeout, turn)
+                self.slots[n] = (time.time(), frozenset())
+                return {"row": "full", "ref": out.ref, "output": r.get("output"), "error": r.get("error")}
         result = {}
-        job = threading.Thread(target=lambda: result.update(self._run(n, items, moved, task, returns, out, row)))
+        job = threading.Thread(target=lambda: result.update(self._run(n, items, moved, task, returns, out, row,
+                                                                      timeout, turn)))
         job.start()
+        self.jobs.append(job)
         if row == "receipt":
-            return {"row": "receipt", "ref": out_ref}
-        if row == "full":
-            job.join()
-            return {"row": "full", "ref": out_ref, "output": result.get("output"), "error": result.get("error")}
+            return {"row": "receipt", "ref": out.ref}
         deadline = self.p["deadline"]
         job.join(max(0.0, t0 + deadline - time.time()))
         time.sleep(max(0.0, t0 + deadline - time.time()))       # the reply time never depends on the job
-        took = result.get("took", deadline + 1) if not job.is_alive() else deadline + 1
-        value = core.clock(core.shape(transport.answer(result.get("output")), returns), took, deadline)
-        return {"row": "shaped", "answer": value, "ref": out_ref, "allowance_left": ledger}
+        value = core.clock(core.shape(transport.answer(result.get("output")), returns),
+                           0 if not job.is_alive() else deadline + 1, deadline)
+        return {"row": "shaped", "answer": value, "ref": out.ref, "allowance_left": ledger}
 
-    def _run(self, n, items, moved, task, returns, out, row):
+    def _run(self, n, items, moved, task, returns, out, row, timeout, turn):
         node = self.p["nodes"][n]
+        with self.turns[n]:                                    # first in, first out: one job at a time
+            self.turns[n].wait_for(lambda: self.serving[n] == turn)
         try:
             files = [i.ref.partition(":")[2] if i.node == n else
                      transport.copy(self.p["nodes"][i.node], i.ref.partition(":")[2], node, node["stage"])
                      for i in items]
             core.run(moved, self.nodes[n], out.ref)
             r = transport.run_job(node, files, task, returns, out.ref.partition(":")[2], keep=row == "receipt",
-                                  timeout=self.p["deadline"] if row == "shaped" else self.p.get("job_timeout", 600),
-                                  salt=core.salt(self.salt_key, out.scopes))
+                                  timeout=timeout, salt=core.salt(self.salt_key, out.scopes))
             self._note(op="done", ref=out.ref, took=round(r["took"], 2))
             return r
         except Exception as e:                                 # never echo private detail to the cloud
             self._note(op="error", ref=out.ref, error=str(e)[:300])
             return {"error": "job failed"}
+        finally:
+            with self.turns[n]:
+                self.serving[n] += 1
+                self.turns[n].notify_all()
 
     # ---------- MCP over HTTP ----------
     def tools(self):

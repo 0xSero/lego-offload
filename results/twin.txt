@@ -1,0 +1,1 @@
+TWIN AGREE: 2000/2000 random cases, 15092 calls, rows {'full': 2583, 'receipt': 1148, 'refused': 10347, 'shaped': 1014}

@@ -7,7 +7,7 @@ and model_ref.py drives these exact functions to cross-check Bend.
 Types:  Scope = str      a name such as "hr"; an empty scope set means public
         Node(name, trust)          a machine and the scopes it may hold
         Item(ref, scopes, node)    some data, its scopes, the machine holding the bytes
-Bricks: label  move  run  shape  charge  clock      (release composes the last three)
+Bricks: label  move  run  shape  charge  clock  queue   (release composes shape, charge, clock)
 """
 import hashlib
 import math
@@ -156,6 +156,25 @@ def charge(ledger, scopes, b):
 def clock(value, took, deadline):
     """The door replies at exactly `deadline`; a job that ran late answers UNKNOWN."""
     return value if took <= deadline else UNKNOWN
+
+
+# ---------- 7. queue: one job at a time per model node ----------
+# A node's slot is (bound, scopes): the latest its last job can end, and that job's scopes.
+
+def queue(slot, t, scopes):
+    """A job reaching the door at t: (scopes it also carries, earliest start). A private job
+    starts as soon as the node is free, so if the job before it may still run, its timing depends
+    on that job: it carries that job's scopes. A public job carries none; it waits for the bound,
+    when the node is surely idle."""
+    bound, prior = slot
+    if not scopes:
+        return frozenset(), max(t, bound)
+    return (prior if t < bound else frozenset()), t
+
+
+def book(slot, t, scopes, timeout):
+    """The slot after a private job: it ends at most `timeout` after its latest start."""
+    return (max(t, slot[0]) + timeout, scopes)
 
 
 # ---------- composition: what an offloaded result may send back ----------

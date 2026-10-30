@@ -1,0 +1,149 @@
+{
+ "date": "2026-10-29 20:48",
+ "trials_per_side": 8,
+ "rows": [
+  {
+   "salary": "above",
+   "private_row": "receipt",
+   "private_seconds": 25.16,
+   "public_row": "full",
+   "public_seconds": 9.76
+  },
+  {
+   "salary": "above",
+   "private_row": "receipt",
+   "private_seconds": 24.41,
+   "public_row": "full",
+   "public_seconds": 12.89
+  },
+  {
+   "salary": "above",
+   "private_row": "receipt",
+   "private_seconds": 24.15,
+   "public_row": "full",
+   "public_seconds": 9.85
+  },
+  {
+   "salary": "above",
+   "private_row": "receipt",
+   "private_seconds": 28.36,
+   "public_row": "full",
+   "public_seconds": 13.56
+  },
+  {
+   "salary": "above",
+   "private_row": "receipt",
+   "private_seconds": 21.59,
+   "public_row": "full",
+   "public_seconds": 9.51
+  },
+  {
+   "salary": "below",
+   "private_row": "receipt",
+   "private_seconds": 0.45,
+   "public_row": "full",
+   "public_seconds": 12.25
+  },
+  {
+   "salary": "below",
+   "private_row": "receipt",
+   "private_seconds": 0.3,
+   "public_row": "full",
+   "public_seconds": 6.78
+  },
+  {
+   "salary": "above",
+   "private_row": "receipt",
+   "private_seconds": 23.73,
+   "public_row": "full",
+   "public_seconds": 10.2
+  },
+  {
+   "salary": "below",
+   "private_row": "receipt",
+   "private_seconds": 0.38,
+   "public_row": "full",
+   "public_seconds": 7.17
+  },
+  {
+   "salary": "below",
+   "private_row": "receipt",
+   "private_seconds": 0.28,
+   "public_row": "full",
+   "public_seconds": 8.08
+  },
+  {
+   "salary": "below",
+   "private_row": "receipt",
+   "private_seconds": 0.31,
+   "public_row": "full",
+   "public_seconds": 8.74
+  },
+  {
+   "salary": "below",
+   "private_row": "receipt",
+   "private_seconds": 0.37,
+   "public_row": "full",
+   "public_seconds": 8.55
+  },
+  {
+   "salary": "above",
+   "private_row": "receipt",
+   "private_seconds": 26.88,
+   "public_row": "full",
+   "public_seconds": 10.88
+  },
+  {
+   "salary": "below",
+   "private_row": "receipt",
+   "private_seconds": 0.34,
+   "public_row": "full",
+   "public_seconds": 7.76
+  },
+  {
+   "salary": "below",
+   "private_row": "receipt",
+   "private_seconds": 0.4,
+   "public_row": "full",
+   "public_seconds": 11.05
+  },
+  {
+   "salary": "above",
+   "private_row": "receipt",
+   "private_seconds": 23.82,
+   "public_row": "full",
+   "public_seconds": 14.21
+  }
+ ],
+ "full_replies": {
+  "above": 8,
+  "below": 8
+ },
+ "private_seconds": {
+  "above": [
+   25.16,
+   24.41,
+   24.15,
+   28.36,
+   21.59,
+   23.73,
+   26.88,
+   23.82
+  ],
+  "below": [
+   0.45,
+   0.3,
+   0.38,
+   0.28,
+   0.31,
+   0.37,
+   0.34,
+   0.4
+  ]
+ },
+ "mean_full_seconds": {
+  "above": 11.36,
+  "below": 8.8
+ },
+ "separable": false
+}
