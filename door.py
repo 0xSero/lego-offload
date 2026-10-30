@@ -16,6 +16,7 @@ verify/Lego.lean proves this composition for any policy.
 import fcntl
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -142,15 +143,20 @@ class Door:
         """Before anything crosses: learn the identifiers of every private file some model sees scrubbed.
         find(scope) gives a function that lists identifiers with a local model trusted with that scope."""
         scrubbed = {s[:-1] for n in self.nodes.values() for s in n.trust if s.endswith("~") and s[:-1] not in n.trust}
+        self.find = find
         for d in [d for d, s in self.scopes.items() if s in scrubbed]:
             node, _, root = d.partition(":")
             f = find(self.scopes[d]) if find else None
             if strict and not f:
                 raise core.Refused(f"{self.scopes[d]} is seen scrubbed, but no local model sees it raw to find its names")
-            for path in transport.files(self.p["nodes"][node], root):
-                data = transport.read(self.p["nodes"][node], path)
-                if not self.vault.known(f"{node}:{path}", data):
-                    self.vault.learn(f"{node}:{path}", data, [self.scopes[d]], f)
+            for path in transport.files(self.p["nodes"][node], root, limit=None):
+                self.learn(f"{node}:{path}", transport.read(self.p["nodes"][node], path, 600), self.scopes[d], f)
+
+    def learn(self, ref, data, scope, f):
+        """A private file's identifiers, its path's included (a name can sit in a file name only)."""
+        if not self.vault.known(ref, data):
+            rel = ref.partition(":")[2][len(next((d.partition(":")[2] for d, s in self.scopes.items() if s == scope), "")):]
+            self.vault.learn(ref, data, [scope], f, also=re.sub(r"[/_]+", " ", rel))
 
     # ---------- the exchange ----------
     def item(self, ref):
@@ -200,6 +206,10 @@ class Door:
         else:
             data = transport.read(self.p["nodes"][node], path, timeout)
         tags = {s.rstrip("~") for s in item.scopes}
+        if scrubbed and set(self.scopes.values()) & tags and not item.ref.startswith(("task", f"{self.host}:{self.ws}/")):
+            scope = next(iter(set(self.scopes.values()) & tags))
+            f = getattr(self, "find", None)
+            self.learn(item.ref, data, scope, f(scope) if f else None)   # a file that came after prepare
         return self.vault.scrub(data.decode(errors="replace"), tags).encode() if scrubbed else data
 
     def level(self, scope, node=None):
@@ -312,10 +322,10 @@ class Door:
                 time.sleep(max(0.0, start - time.time()))
                 r = run()
                 self.slots[n] = (time.time(), frozenset())
-                output = r.get("output")
+                output, raw = r.get("output"), {s.rstrip("~") for s in out.scopes} & self.seen
                 if output and (scrub_task or any(s for _, s in given)):
-                    output = self.vault.unscrub(output, {s for s in self.seen if not s.endswith("~")})
-                self.taint(out.scopes)
+                    output = self.vault.unscrub(output, raw)  # only this job's scopes, only those seen raw
+                self.taint(out.scopes | raw)
                 return {"row": "full", "ref": out.ref, "output": output, "error": r.get("error")}
         result = {}
         job = threading.Thread(target=lambda: result.update(run()))

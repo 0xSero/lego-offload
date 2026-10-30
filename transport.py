@@ -48,8 +48,9 @@ def read(node, path, timeout=60):
 
 
 def files(node, root, limit=200):
-    """The regular files under a directory on a node (for the catalog and the vault)."""
-    out = _sh(node, f"find {shlex.quote(root)} -type f -size -2M 2>/dev/null | sort | head -{limit}; true")
+    """The regular files under a directory on a node: the first `limit` for a listing, all with None."""
+    out = _sh(node, f"find {shlex.quote(root)} -type f 2>/dev/null | sort" + (f" | head -{limit}" if limit else "") + "; true",
+              timeout=120)
     return [line for line in out.decode(errors="replace").splitlines() if line]
 
 

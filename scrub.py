@@ -127,18 +127,20 @@ class Vault:
             for m in re.finditer(p, text):
                 self.add(m.group(1) if m.lastindex else m.group(0), kind, scopes)
 
-    def learn(self, name, data, scopes, find=None):
+    def learn(self, name, data, scopes, find=None, also=""):
         """Record every identifier in one private file: patterns, identifier columns of a table, and what
-        `find(text)` (a local model trusted with the file) lists as people, addresses and other ids."""
-        text = norm(data.decode(errors="replace") if isinstance(data, bytes) else data)
+        `find(text)` (a local model trusted with the file) lists as people, addresses and other ids.
+        `also`: more text to search the same way, such as the file's path."""
+        raw = norm(data.decode(errors="replace") if isinstance(data, bytes) else data)
+        text = also + "\n" + raw if also else raw
         self.find_in(text, scopes)
         ext = name.rsplit(".", 1)[-1].lower()
         if ext in ("csv", "tsv"):
             try:
-                delim = "\t" if ext == "tsv" else csv.Sniffer().sniff(text[:4096], ",;\t|").delimiter
+                delim = "\t" if ext == "tsv" else csv.Sniffer().sniff(raw[:4096], ",;\t|").delimiter
             except csv.Error:
                 delim = ","
-            rows = list(csv.reader(io.StringIO(text), delimiter=delim))
+            rows = list(csv.reader(io.StringIO(raw), delimiter=delim))
             for c, head in enumerate(rows[0] if rows else []):
                 head = re.sub(r"[_.\-]+", " ", head.strip().lower())
                 kind = next((k for k, p in COLUMNS if re.search(p, head)), None)
@@ -149,7 +151,7 @@ class Vault:
         for kind, value in (find(text) if find else []):
             if flat(norm(value)).lower() in low:                  # only what is really in the file
                 self.add(value, kind, scopes)
-        self.v["files"][name] = hashlib.sha256(text.encode()).hexdigest()
+        self.v["files"][name] = hashlib.sha256(raw.encode()).hexdigest()
         self.save()
 
     def known(self, name, data):
@@ -183,11 +185,12 @@ class Vault:
         return text
 
     def scrub_name(self, name, scopes):
-        """A file name, piece by piece: `alice_nguyen-review.md` -> `[PERSON_1]_[PERSON_1]-review.md`."""
-        self._pattern()
+        """A file name: whole first (emails, numbers), then piece by piece, `alice_nguyen-review.md` ->
+        `[PERSON_1]_[PERSON_1]-review.md`."""
+        name = self.scrub(name, scopes)
         lower = {k.lower(): t for k, t in self.forms.items()}
-        return re.sub(r"[A-Za-z0-9@+]+", lambda m: self.v["ids"].get(m.group(0).lower()) or lower.get(m.group(0).lower())
-                      or self.scrub(m.group(0), scopes), name)
+        return re.sub(r"(?<!\[)[A-Za-z0-9]+(?![\w]*\])", lambda m: self.v["ids"].get(m.group(0).lower())
+                      or lower.get(m.group(0).lower()) or m.group(0), name)
 
     def unscrub(self, text, allowed):
         """Placeholders back to real values, only those whose every scope is in `allowed`."""

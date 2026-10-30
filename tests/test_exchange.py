@@ -15,7 +15,7 @@ GOT = []                                                       # (node, what the
 
 
 def fake_job(node, files, task, returns, out, keep, timeout, salt=None):     # the files are staged on this host
-    seen = task + "".join(Path(f).read_text() for f in files)
+    seen = task + "".join(Path(f).name + Path(f).read_text() for f in files)
     GOT.append((node["model"]["model"], seen))
     reply = json.dumps({"answer": True}) if returns else "echo: " + seen
     return {"took": 0.0, "output": None if keep else reply}
@@ -23,7 +23,8 @@ def fake_job(node, files, task, returns, out, keep, timeout, salt=None):     # t
 
 transport.run_job = fake_job
 CSV = "name,email,salary\nZorbina Quellwater,zq@corp.example,162000\nQuillon Brimstoke,qb@corp.example,118000\n"
-IDS = ["Zorbina", "Quellwater", "Quillon", "Brimstoke", "zq@corp.example", "qb@corp.example", "sk_live_Canary123456789012345"]
+IDS = ["Zorbina", "Quellwater", "Quillon", "Brimstoke", "zq@corp.example", "qb@corp.example", "sk_live_Canary123456789012345",
+       "Varnella", "Oxtrude", "Pellamy", "Strand"]
 
 
 def setup(tmp):
@@ -139,7 +140,29 @@ def test_found_leaks_stay_fixed():
         assert lego.caller(p, "codex") is None and lego.caller(p, "claude") == "cloud"
 
 
+def test_second_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/zq@corp.example.txt").write_text("notes")                    # identifiers in file names only
+        (t / "hr/Varnella_Oxtrude.md").write_text("notes")
+        rev = door.Door(p, t / "state", "pop")
+        rev.prepare(lambda scope: lambda text: [("PERSON", "Varnella Oxtrude")] if "Varnella" in text else [])
+        GOT.clear()
+        r = rev.offload("Summarise", [str(t / "hr")], node="cloud")          # never read: replies are tokens
+        assert not leaked(GOT[-1][1]), GOT[-1]                               # staged names scrubbed too
+        assert "Zorbina Quellwater" in r["output"] and "hr" in rev.context   # unscrubbed, so labelled raw
+        cloud = door.Door(p, t / "state", "cloud")
+        assert not cloud.context <= cloud.seen                               # a later cloud session is refused
+        (t / "ws3").mkdir()
+        fwd = door.Door({**p, "workspace": str(t / "ws3")}, t / "state3", "cloud")
+        fwd.prepare(lambda scope: lambda text: [("PERSON", "Varnella Oxtrude")] if "Varnella" in text else [])
+        assert not leaked(fwd.about()), fwd.about()                          # the catalog the cloud sees
+        (t / "hr/late.csv").write_text("name,salary\nPellamy Strand,99000\n")   # arrived after prepare
+        assert not leaked(fwd.read(str(t / "hr/late.csv"))["text"])
+
+
 if __name__ == "__main__":
-    for f in (test_levels, test_forward_cloud_in_front, test_reverse_local_in_front, test_found_leaks_stay_fixed):
+    for f in (test_levels, test_forward_cloud_in_front, test_reverse_local_in_front, test_found_leaks_stay_fixed,
+              test_second_hunt_stays_fixed):
         f()
         print("ok  ", f.__name__)
