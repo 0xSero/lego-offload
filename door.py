@@ -14,6 +14,7 @@ inputs -> run -> reply. Every decision is a core.py brick on the scopes hidden f
 verify/Lego.lean proves this composition for any policy.
 """
 import fcntl
+import hmac
 import json
 import os
 import re
@@ -287,12 +288,17 @@ class Door:
             raw = lvl == "everything" and all(s in v.trust for n, v in self.nodes.items() if runnable(self.p["nodes"][n]))
             new = 0
             shown_names = []
+            hidden = any(self.level(s, self.nodes[n]) == "nothing" for n, v in self.p["nodes"].items() if runnable(v))
             for f in (found[:60] if raw else found) if lvl != "nothing" else []:
                 if f"{node}:{f}" not in self.learned and not raw and not self.vault.known(
                         f"{node}:{f}", transport.read(self.p["nodes"][node], f)):
                     new += 1                                   # not learned: its name may hold an identifier
                     continue
-                name = f"{shown}{f[len(root):] if raw else self.vault.scrub_name(f[len(root):], [s])}"
+                if hidden:                                     # a model sees nothing of it: not even names
+                    tag = hmac.new(bytes.fromhex(self.vault.v["key"]), f.encode(), "sha256").hexdigest()[:8]
+                    name = f"{shown}/#{tag}"
+                else:
+                    name = f"{shown}{f[len(root):] if raw else self.vault.scrub_name(f[len(root):], [s])}"
                 self.alias[name] = f"{node}:{f}"
                 self.learned.add(f"{node}:{f}")
                 shown_names.append("    " + name)

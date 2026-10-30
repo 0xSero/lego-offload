@@ -284,6 +284,25 @@ def test_sixth_hunt_stays_fixed():
         assert all("hr" not in i.scopes for i in d.items(["g1"]))
 
 
+def test_seventh_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "keys/globex-acquisition-wire-instructions.env").write_text("x")
+        (t / "hr/people.csv").write_text("name,phone,dob,employee id\nFrank Brown,415-555-0134,1985-03-04,E-10234\n"
+                                         "Siobhan O'Brien,020 7946 0958,1979-11-23,E-20000\n")
+        (t / "hr/415_555_0134_call.md").write_text("call")
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        listing = pop.read(".")["text"]
+        assert "globex" not in listing and "prod.env" not in listing, listing   # keys: the cloud sees nothing
+        assert any(i.ref.endswith("prod.env") for i in pop.items([ln.strip() for ln in listing.splitlines() if "/#" in ln][:2]))
+        text = pop.vault.scrub("frank_brown FrankBrown frank-brown Ms O\u2019Brien born 3/4/1985, id E10234", {"hr"})
+        assert not any(w in text for w in ("rank", "Brien", "1985", "10234")), text
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2").mkdir()
+        assert "0134" not in cloud.about()
+
+
 def tmp_out():
     return tempfile.mkdtemp() + "/out.txt"
 
@@ -291,6 +310,6 @@ def tmp_out():
 if __name__ == "__main__":
     for f in (test_levels, test_forward_cloud_in_front, test_reverse_local_in_front, test_found_leaks_stay_fixed,
               test_second_hunt_stays_fixed, test_third_hunt_stays_fixed, test_fourth_hunt_stays_fixed,
-              test_fifth_hunt_stays_fixed, test_sixth_hunt_stays_fixed):
+              test_fifth_hunt_stays_fixed, test_sixth_hunt_stays_fixed, test_seventh_hunt_stays_fixed):
         f()
         print("ok  ", f.__name__)

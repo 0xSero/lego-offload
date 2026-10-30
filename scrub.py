@@ -64,13 +64,15 @@ COMMON = set("will mark may june april august grace hope faith joy rose pat bill
              "long young little black white brown green king bell hill wood page lane gray grey rich chase hunter "
              "major price love case cash ward stone field park banks miles holly ivy jack sky".split())
 TOKEN = re.compile(r"\[([A-Z]+)_([0-9a-f]+)\]")
-SEP = r"[ ().\-/]{0,2}"                                         # between the digits of a written number
+SEP = r"[ ().\-/_]{0,2}"                                         # between the digits of a written number
 CF = dict.fromkeys(c for c in range(0x10000) if unicodedata.category(chr(c)) == "Cf")
+MARKS = {**dict.fromkeys(map(ord, "\u2018\u2019\u02bc\uff07\u0060\u00b4"), "'"),        # O’Brien is O'Brien
+         **dict.fromkeys(range(0x2010, 0x2016), "-")}
 
 
 def norm(s):
     """NFKC, invisible format characters removed, a hyphen at a line break joined."""
-    return re.sub(r"-\n\s*", "", unicodedata.normalize("NFKC", s).translate(CF))
+    return re.sub(r"-\n\s*", "", unicodedata.normalize("NFKC", s).translate(CF).translate(MARKS))
 
 
 def flat(s):
@@ -122,12 +124,15 @@ class Vault:
             token = self.v["ids"].get(value.lower()) or self._new(value, kind, scopes)
             self.v["ids"][value.lower()] = token
             self._tag(token, scopes)
+            bare = re.sub(r"[\W_]+", "", value).lower()          # E-10234 written E10234
+            if kind in ("ID", "ADDRESS", "IBAN", "CARD") and bare != value.lower() and len(bare) >= 4 and not bare.isdigit():
+                self._tag(self.v["ids"].setdefault(bare, token), scopes)
             digits = re.sub(r"\D", "", value)
             forms = {digits, digits[-10:]}                      # 4155550134, (415) 555 0134, +1 ...
             ymd = re.fullmatch(r"(\d{4})\D(\d{1,2})\D(\d{1,2})|(\d{1,2})\D(\d{1,2})\D(\d{4})", value)
             if kind == "DOB" and ymd:                           # 1985-03-14 = 14/03/1985 = 03.14.1985
                 y, a, b = ymd.group(1, 2, 3) if ymd.group(1) else (ymd.group(6), ymd.group(4), ymd.group(5))
-                forms = {y + a.zfill(2) + b.zfill(2), a.zfill(2) + b.zfill(2) + y, b.zfill(2) + a.zfill(2) + y}
+                forms = {f for a, b in {(a.zfill(2), b.zfill(2)), (str(int(a)), str(int(b)))} for f in (y + a + b, a + b + y, b + a + y)}
             if kind in ("PHONE", "SSN", "CARD", "IBAN", "ID", "DOB") and len(digits) >= 7:
                 for d in forms:
                     self._tag(self.v["digits"].setdefault(d, token), scopes)
@@ -194,19 +199,22 @@ class Vault:
             self._re = {}
         if key not in self._re:
             mine = lambda t: set(self.v["scope"].get(t, [])) & key  # noqa: E731
-            alt = lambda keys: "|".join(re.escape(k).replace(r"\ ", r"\s+") for k in sorted(keys, key=len, reverse=True))  # noqa: E731
+            alt = lambda keys: "|".join(re.escape(k).replace(r"\ ", r"[\s_.\-]*")   # frank brown: frank_brown, FrankBrown
+                                        for k in sorted(keys, key=len, reverse=True))  # noqa: E731
             ids = {k: t for k, t in self.v["ids"].items() if mine(t)}
+            joined = {re.sub(r"[\s_.\-]+", "", k): t for k, t in ids.items()}   # how a match is looked up
             forms, folded = {}, {}
             for p, t in self.v["parts"].items():
                 if mine(t):
-                    for f in {p, p.upper(), p.title()} | ({p.lower()} if p.lower() not in COMMON else set()):
-                        forms.setdefault(f, t)
+                    for q in {p, p.replace("'", "")}:          # O'Brien, OBrien
+                        for f in {q, q.upper(), q.title()} | ({q.lower()} if q.lower() not in COMMON else set()):
+                            forms.setdefault(f, t)
                     if len(p) >= 4 and p.lower() not in COMMON:
                         folded.setdefault(fold(p), t)
             b, e = r"(?<![A-Za-z0-9])", r"(s?)(?![A-Za-z0-9])"     # '_' and '.' separate words; plurals too
             digits = {d: t for d, t in self.v["digits"].items() if mine(t)}
             short = {fold(p): t for p, t in self.v["parts"].items() if mine(t) and len(p) < 4 and p.lower() not in COMMON}
-            self._re[key] = (ids, forms, [re.compile(b + "(" + alt(ks) + ")" + e, fl) if ks else None for ks, fl in
+            self._re[key] = (joined, forms, [re.compile(b + "(" + alt(ks) + ")" + e, fl) if ks else None for ks, fl in
                                           ((ids, re.I), (forms, 0))],
                              folded, re.compile("|".join(map(re.escape, sorted(folded, key=len, reverse=True)))) if folded else None,
                              (digits, re.compile(r"(?<!\d)(?:" + "|".join(SEP.join(d) for d in sorted(digits, key=len, reverse=True))
@@ -228,7 +236,8 @@ class Vault:
             text = numbers.sub(lambda m: digits[re.sub(r"\D", "", m.group(0))], text)
         for look, r in zip((ids, forms), res):
             if r:
-                text = r.sub(lambda m: (look[flat(m.group(1)).lower()] if look is ids else look[m.group(1)]) + m.group(2), text)
+                text = r.sub(lambda m: (look[re.sub(r"[\s_.\-]+", "", m.group(1).lower())] if look is ids else look[m.group(1)])
+                             + m.group(2), text)
         if not inner and not short:
             return text
 
