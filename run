@@ -18,6 +18,7 @@ unit() {
   step unit
   t 300 python3 tests/test_core.py
   t 300 python3 tests/test_queue.py
+  t 300 python3 tests/test_exchange.py
   t 300 python3 tests/test_room.py
   t 300 python3 tests/test_agents.py | tee results/agents.txt
 }

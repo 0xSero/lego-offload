@@ -22,6 +22,8 @@ Results go to `../results/`.
 
 The cloud is a node trusted with nothing. It may call `offload(inputs, node, returns)` as often as it likes. `core.salt` keys each node's prompt cache by scope set, so a cache hit never links two scopes.
 
+**A caller that sees some scopes.** With the two-way policy the caller (the agent's own model) may see a set T of scopes: some raw, some only scrubbed (a scrubbed twin such as `hr~` is a scope of its own, granted on its own). The door runs every brick on the scopes hidden from the caller, `scopes \ T`, so "public" in the model means "nothing hidden from the caller". That is a relabelling, and the theorems carry over unchanged. `leak_bound` for a set S of scopes disjoint from T fixes every secret outside S, including T's, so items labelled only with T scopes are constants in the compared worlds, exactly like public items in the model. So the caller learns at most Σ_{s∈S} allowance bits about S beyond what it may see. For scrubbed scopes, that means beyond the scrubbed view. `twin.py` checks the relabelling: a random T in every case, Lean given the hidden labels.
+
 ## What is proved (`Lego.lean`)
 
 The model is a state machine over symbolic secrets:
@@ -58,7 +60,7 @@ The proof is an invariant (`Inv`) plus a digit argument. Each charged answer add
 
 ## Twin (`twin.py`)
 
-`lean --run Lego.lean` executes the same `step` function that the proofs are about. `twin.py` generates 2,000 random cases: a host and up to three model nodes with random trust, random allowances and catalogs, and up to 14 calls at random times with random schemas, inputs and job lengths. For every call it compares the row, output scopes, bits charged, ledger and the node's slot from Lean with those from the real `Door.decide`. All 15,092 calls agree. Two deliberate bugs in `core.py` were each caught: `<` turned into `≤` in `queue` (7 cases), and `book` ignoring the old bound (398 cases).
+`lean --run Lego.lean` executes the same `step` function that the proofs are about. `twin.py` generates 2,000 random cases: a host and up to three model nodes with random trust, a caller that sees a random set of scopes, random allowances and catalogs, and up to 14 calls at random times with random schemas, inputs and job lengths. For every call it compares the row, the output's hidden scopes, bits charged, ledger and the node's slot from Lean with those from the real `Door.decide`. All 14,695 calls agree. Deliberate bugs are caught: `<` turned into `≤` in `queue` (2 of 2,000 cases), `book` ignoring the old bound (278 of 2,000), and a door that ignores what the caller sees (74 of 400).
 
 ## Contention: why the queue exists
 

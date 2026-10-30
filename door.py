@@ -157,6 +157,9 @@ class Door:
     def read(self, ref):
         it = self.item(ref)
         got = self.give(it, self.caller) if self.caller else (it, False) if not it.scopes else None
+        if core.SEALED in it.scopes:
+            raise core.Refused(f"{it.ref.partition(':')[2]} is not a listed file (sealed): use an absolute path from "
+                               "the list in the tool description, or a file in your workspace")
         if not got:
             raise core.Refused(f"you may not see {sorted(it.scopes)}; ask about it with offload and `returns`")
         self.context |= got[0].scopes
@@ -185,8 +188,19 @@ class Door:
             self.slots[n] = core.book(self.slots[n], t, self.hidden(out.scopes), timeout)
         return out, row, ledger, timeout, start
 
+    def items(self, refs):
+        """Inputs as items. A directory stands for every file in it, so a model that may not see the
+        file names can still name the data."""
+        out = []
+        for r in refs:
+            it = self.item(r)
+            node, _, path = it.ref.partition(":")
+            found = [] if it.ref in self.refs or core.SEALED in it.scopes else transport.files(self.p["nodes"][node], path)
+            out += [self.item(f"{node}:{f}") for f in found] if found and found != [path] else [it]
+        return out
+
     def offload(self, task, inputs=(), returns=None, node=None):
-        items = [self.item(r) for r in inputs]
+        items = self.items(inputs)
         text = core.Item("task", frozenset(self.context), self.p["host"])
         if returns is not None:
             core.bits(returns)                                 # refuse bad shapes before anything else
@@ -282,7 +296,7 @@ class Door:
                 f"Models you can offload to: {', '.join(others) or 'none'}.\n"
                 "Tools: `read` gets a file at your level (raw or scrubbed). `offload` hands a task to another "
                 "model: it sees only your task text and the files you list in `inputs`, nothing else, so write "
-                "complete instructions and name every file. If you could see all the inputs, you get the full "
+                "complete instructions and name every file (a directory stands for all of its files). If you could see all the inputs, you get the full "
                 "result. On inputs you may not see, pass `returns` (one small typed answer: {\"bool\": true}, "
                 "{\"enum\": [..]}, {\"int\": [lo, hi]} or {\"tuple\": [..]}), which arrives after a fixed delay "
                 "and is paid from a per-scope bit allowance; without `returns` you get a receipt (the result is "

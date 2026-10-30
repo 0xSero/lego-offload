@@ -1,21 +1,27 @@
 # lego-offload
 
-Run any cloud coding agent (Claude Code, Codex, Cursor, Cline) on private data it is never allowed to see.
+Run a coding agent next to private data, with the cloud and your own local model each seeing only what you allow. It works both ways:
 
 ```
-lego claude --dangerously-skip-permissions
-lego codex --dangerously-bypass-approvals-and-sandbox
-lego cursor --yolo
-lego cline -y "How many people in hr earn over 150k?"
+lego claude --dangerously-skip-permissions    # cloud agent in front; private work goes to your local model
+lego omp                                      # local agent in front; the cloud is its helper
+lego codex | cursor | cline ...               # other cloud agents, same as claude
 ```
 
-- The agent runs in a **sealed room**, a macOS sandbox. Inside it can reach its workspace and two localhost ports, and nothing else.
+The policy says, per model, how much of each private directory it **sees**:
+
+| Level | The model gets |
+|-|-|
+| `everything` | the raw bytes |
+| `scrubbed` | the same data, with every name, email, phone, address, account number and key swapped for a stable placeholder such as `[PERSON_3]` |
+| `nothing` | no bytes. It may ask small typed questions, paid in bits from an allowance, or get a receipt |
+
+One exchange rule covers every byte that moves between models, in either direction: **an item crosses raw if the receiver sees its scopes, scrubbed if it sees them scrubbed, and not at all otherwise.** The agent's task text and its workspace carry every scope it has been given, so they cross by the same rule. A result comes back in full only if the agent could have seen all of its inputs; otherwise it is a shaped answer at a fixed time, or a receipt.
+
+- The agent runs in a **sealed room**, a macOS sandbox. Inside it can reach its workspace and two localhost ports, and nothing else. Private files are not in the room: it reads them through the door, at its level.
 - Its model traffic goes through the **route**, which holds the real credential. The room only ever holds a placeholder.
-- Private data stays on the machines trusted with it, here a GPU box called `gpu-box`. A **local model** on that machine does the private work.
-- The agent gets one tool, `offload`, served by the **door**. What comes back is decided by seven small rules, the **bricks**:
-  - **Public inputs:** the full output.
-  - **Private inputs:** a small typed answer (an int, a bool or an enum), paid for in bits from a per-scope allowance and delivered at a fixed time.
-  - **Anything else:** a receipt.
+- The agent gets two tools from the **door**: `read` (a file at its level) and `offload` (a task for another model). Their descriptions list every private directory and the level the agent has for it, so the agent knows what it can do without being told.
+- Scrubbing uses a **vault** learned before anything crosses: identifier patterns, the identifier columns of CSVs, and the identifiers a local model trusted with the file lists. Placeholders are the same in every file and message, so data still joins up, and they are turned back into real names for a model that sees everything.
 
 The design is proved in Lean with no size bound: for any policy, any adaptive strategy and any number of calls, the agent learns at most its allowance in bits, counting answers, reply times, the node's queue and its prompt cache. The Lean model is run against the real door to check they decide alike. A Bend simulation estimates how useful the system is, and every agent is tested end to end with real models on synthetic private data.
 
@@ -69,22 +75,23 @@ Requirements:
 
 ## How you use it
 
-**1. Write a policy.** It names the machines, what each may hold, which directories are private, and how many bits per scope an agent may learn. Put it at `./lego.json`, `~/.lego/policy.json`, or pass `--policy FILE`. See [`examples/policy.json`](examples/policy.json):
+**1. Write a policy.** Name the private directories once, then say what each model sees. Put it at `./lego.json`, `~/.lego/policy.json`, or pass `--policy FILE`. See [`examples/policy.json`](examples/policy.json):
 
 ```json
-"nodes": {
-  "mac":   {"trust": ["hr", "acme", "legal", "sealed"]},
-  "pop":   {"trust": ["hr", "acme"], "ssh": "gpu-box",
-            "model": {"base_url": "http://127.0.0.1:8000/v1", "model": "deepseek-v4.1-flash-1017"}},
-  "cloud": {"trust": []}
-},
-"scopes":    {"pop:/srv/data/hr": "hr", "pop:/srv/data/acme": "acme", "mac:/Users/you/legal": "legal"},
-"public":    ["/Users/you/code/app/README.md", "/Users/you/code/app/src/utils.py"],
-"allowance": {"hr": 16, "acme": 16, "legal": 16},
-"deadline":  30
+{
+  "private": {"hr": "~/private/hr", "keys": "~/private/keys"},
+  "public": ["~/code/app/README.md"],
+  "allowance": 16,
+  "models": {
+    "pop":   {"url": "http://gpu-box:8000/v1", "model": "deepseek-v4.1-flash-1017",
+              "ssh": "gpu-box", "dir": "/srv/lego", "sees": "everything"},
+    "cloud": {"api": "anthropic", "model": "claude-sonnet-5-5",
+              "sees": {"hr": "scrubbed", "keys": "nothing"}}
+  }
+}
 ```
 
-Anything not listed is `sealed`: no node with a model may hold it, and no allowance can buy it. The workspace is the policy's `workspace`, or the directory you run `lego` in.
+`sees` is `"everything"`, `"scrubbed"`, `"nothing"`, or a level per scope. `allowance` is the bits per scope a model may learn by questions about data it does not see. Anything not listed is `sealed`: no model may be given it, and no allowance can buy it. Cloud agents (`claude`, `codex`, `cursor`, `cline`) run as the model with `api`; `omp` runs as the first model with a `url`. The workspace is the policy's `workspace`, or the directory you run `lego` in. The full form the door runs on (nodes, trust sets, scopes) is still accepted.
 
 **2. Run your agent through lego** instead of directly. Every argument after the agent name goes to the agent unchanged:
 

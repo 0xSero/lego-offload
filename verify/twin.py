@@ -8,6 +8,11 @@ both sides report the row, the output's scopes, the bits charged, the ledger, an
 queue slot (bound and scopes). Python runs door.Door.decide, the method offload uses, so this
 covers core.queue, core.book, core.release_plan, core.charge, core.bits and pick_node. A
 public job's slot after its run is its simulated finish (start + min(duration, timeout)).
+
+The caller may see some scopes (`seen`; a scrubbed twin such as hr~ is just another scope). The door
+runs every brick on the scopes hidden from the caller, so Lean gets each item's hidden scopes and the
+proof's "public" means "nothing hidden". Model nodes trust everything the caller sees, as a node
+that a job may be moved to must.
 """
 import json
 import random
@@ -27,7 +32,8 @@ NUM = {v: k for k, v in NAME.items()}
 
 
 def gen(rng):
-    nodes = [(0, False, [0, 1, 2, 3])] + [(n, True, sorted(rng.sample([1, 2, 3], rng.choice([1, 2, 3, 3, 3]))))
+    seen = sorted(rng.sample([1, 2, 3], rng.choice([0, 0, 0, 1, 1, 2])))
+    nodes = [(0, False, [0, 1, 2, 3])] + [(n, True, sorted(set(rng.sample([1, 2, 3], rng.choice([1, 2, 3, 3, 3]))) | set(seen)))
                                          for n in range(1, rng.randint(2, 4))]
     allow = [(s, rng.randint(0, 12)) for s in (1, 2, 3)]
     items = [(0, [])] + [(0, [rng.choice([0, 1, 1, 2, 2, 3])]) for _ in range(rng.randint(1, 4))]
@@ -37,14 +43,15 @@ def gen(rng):
         k = rng.choice([0, 0, 1, 2, 3, 7, 100, 1 << 16, 1 << 17])
         ins = [rng.randrange(len(items) + c // 2 + 1) for _ in range(rng.choice([0, 1, 1, 1, 2, 3]))]
         calls.append((t, rng.choice([n for n, *_ in nodes] + [1, 1, 9]), k, rng.choice([0, 3, 25, 31, 90, 200]), ins))
-    return {"policy": (30, 100, core.MAX_BITS), "nodes": nodes, "allow": allow, "items": items, "calls": calls}
+    return {"policy": (30, 100, core.MAX_BITS), "nodes": nodes, "allow": allow, "items": items, "calls": calls,
+            "seen": seen}
 
 
 def to_text(case):
     out = ["case", "policy " + " ".join(map(str, case["policy"]))]
     out += [f"node {n} {int(m)} " + " ".join(map(str, ts)) for n, m, ts in case["nodes"]]
     out += [f"allow {s} {b}" for s, b in case["allow"]]
-    out += [f"item {n} " + " ".join(map(str, ss)) for n, ss in case["items"]]
+    out += [f"item {n} " + " ".join(str(s) for s in ss if s not in case["seen"]) for n, ss in case["items"]]
     out += [f"call {t} {n} {k} {d} " + " ".join(map(str, ins)) for t, n, k, d, ins in case["calls"]]
     return "\n".join(out + ["end"])
 
@@ -60,9 +67,9 @@ def python(case, state):
     policy = {"host": "n0", "workspace": "/ws", "public": ["/pub/0"], "deadline": deadline,
               "job_timeout": job_timeout, "allowance": {SCOPES[s]: b for s, b in case["allow"]},
               "scopes": {f"n0:/data/{v}": v for v in SCOPES.values()},
-              "nodes": {f"n{n}": {"trust": [NAME[s] for s in ts], "model": m, "out": f"/out{n}"}
-                        for n, m, ts in case["nodes"]}}
-    d = door.Door(policy, state)
+              "nodes": {**{f"n{n}": {"trust": [NAME[s] for s in ts], "model": m, "out": f"/out{n}"}
+                           for n, m, ts in case["nodes"]}, "caller": {"trust": [NAME[s] for s in case["seen"]]}}}
+    d = door.Door(policy, state, "caller")
     d.reset()
     refs = []                                                  # Lean's σ.items, in order
     for i, (n, ss) in enumerate(case["items"]):
@@ -86,7 +93,7 @@ def python(case, state):
         refs.append(o.ref)
         if row == "full":
             d.slots[name] = (start + min(dur, timeout), frozenset())
-        out.append(line(row, o.scopes, core.bits(returns) if row == "shaped" else 0, led, d.slots[name]))
+        out.append(line(row, d.hidden(o.scopes), core.bits(returns) if row == "shaped" else 0, led, d.slots[name]))
     return out
 
 

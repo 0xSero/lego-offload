@@ -1,20 +1,13 @@
 {
-  "host": "mac",
   "workspace": "/Users/you/code/app",
+  "private": {"hr": "/Users/you/private/hr", "acme": "/Users/you/private/acme", "keys": "/Users/you/private/keys"},
   "public": ["/Users/you/code/app/README.md", "/Users/you/code/app/src/utils.py"],
+  "allowance": 16,
   "deadline": 30,
-  "job_timeout": 300,
-  "nodes": {
-    "mac":   {"trust": ["hr", "acme", "legal", "sealed"], "out": "/Users/you/.lego/out", "stage": "/Users/you/.lego/stage"},
-    "pop":   {"trust": ["hr", "acme"], "ssh": "gpu-box", "out": "/srv/lego/out", "stage": "/srv/lego/stage",
-              "model": {"base_url": "http://127.0.0.1:8000/v1", "model": "deepseek-v4.1-flash-1017"}},
-    "cloud": {"trust": []}
-  },
-  "scopes": {
-    "pop:/srv/data/hr": "hr",
-    "pop:/srv/data/acme": "acme",
-    "mac:/Users/you/legal": "legal"
-  },
-  "allowance": {"hr": 16, "acme": 16, "legal": 16},
-  "catalog": ["pop:/srv/data/hr/salaries.csv", "pop:/srv/data/acme/contract.md", "mac:/Users/you/legal/memo.txt"]
+  "models": {
+    "pop":   {"url": "http://gpu-box:8000/v1", "model": "deepseek-v4.1-flash-1017",
+              "ssh": "gpu-box", "dir": "/srv/lego", "sees": "everything"},
+    "cloud": {"api": "anthropic", "model": "claude-sonnet-5-5",
+              "sees": {"hr": "scrubbed", "acme": "scrubbed", "keys": "nothing"}}
+  }
 }
