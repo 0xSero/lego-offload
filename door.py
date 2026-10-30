@@ -275,8 +275,12 @@ class Door:
         path = os.path.normpath(path)                          # ws/../keys is keys
         path = self.upto(path) if node == self.host else path  # /var is /private/var; nothing inside a scope followed
         fold = lambda p: unicodedata.normalize("NFC", p).casefold()  # noqa: E731   KEYS is keys
-        named = core.label(f"{node}:{fold(path)}", {fold(p) for p in self.public}, (fs := {fold(d): s for d, s in self.scopes.items()}))
-        named = named if core.SEALED not in named and not (node == self.host and inside(fold(path), fold(self.ws))) else None
+        fk = lambda d: f"{d.partition(':')[0]}:{fold(d.partition(':')[2])}"  # noqa: E731   the node as written
+        named = core.label(f"{node}:{fold(path)}", set(map(fk, self.public)), (fs := {fk(d): s for d, s in self.scopes.items()}))
+        ours = node == self.host and inside(fold(path), fold(self.ws))
+        if core.SEALED in named and not ours and f"{node}:{path}" not in self.refs:
+            raise self.sealed(asked)                           # from its spelling alone: the disk is never looked at
+        named = named if core.SEALED not in named and not ours else None
         if named and not internal and ref not in self.refs and not core.may_hold(self.me, named):
             if not core.may_hold(self.me, core.scrubbed(named)):  # a scope it sees nothing of: decided from the name,
                 self.deferred.add(f"{node}:{path}")            # the files are found only inside the job
@@ -300,6 +304,11 @@ class Door:
                 if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):
                     raise core.Refused(f"{asked} is not a regular file")
                 self.inodes[f"{node}:{path}"] = (st.st_dev, st.st_ino)
+        elif not internal and f"{node}:{path}" not in self.refs:  # on another machine: no link on the way there
+            try:
+                transport.kind(self.p["nodes"][node], path)
+            except RuntimeError:
+                raise core.Refused(f"{asked} goes through a link lego does not follow, or is not a regular file") from None
         ref = f"{node}:{path}"
         scopes = self.refs[ref] if ref in self.refs else core.label(ref, self.public, self.scopes)
         if node == self.host and inside(path, self.ws):
@@ -311,6 +320,10 @@ class Door:
                 not core.may_hold(self.me, scopes) and core.may_hold(self.me, core.scrubbed(scopes)):
             raise core.Refused(f"name files in {sorted(scopes)} by the names listed (read \".\" lists them)")
         return core.Item(ref, scopes, node)
+
+    def sealed(self, ref):
+        return core.Refused(f"{ref} is sealed. You can read files listed under the private directories, files in "
+                            f"your workspace {self.ws}, and offload refs as returned. read \".\" lists them.")
 
     def upto(self, path):
         """The path with links resolved only until it reaches a private directory; the rest as written,
@@ -330,8 +343,8 @@ class Door:
                 continue
             try:
                 fd = transport.nofollow(cur)
-            except OSError:                                    # missing, or changed meanwhile: as written
-                return os.path.join(cur, p, *rest)
+            except OSError:                                    # missing, not a folder, or changed meanwhile:
+                return os.path.join(cur, p, *rest)             # as written
             try:
                 if stat.S_ISLNK(os.stat(p, dir_fd=fd, follow_symlinks=False).st_mode):
                     if hops == 40:
@@ -340,7 +353,7 @@ class Door:
                     cur, rest = ("/" if tgt.startswith("/") else cur), [q for q in tgt.split("/") if q] + rest
                 else:
                     cur = spelled(fd, p) or os.path.join(cur, p)   # case and firmlinks only: p is no link
-            except FileNotFoundError:
+            except OSError:
                 return os.path.join(cur, p, *rest)
             finally:
                 os.close(fd)
@@ -448,8 +461,7 @@ class Door:
         if any(inside(d.partition(":")[2], path) for d in self.scopes) or it.ref == f"{self.host}:{self.ws}":
             return {"row": "listing", "text": self.listing()}  # what you can name, at your level
         if core.SEALED in it.scopes:
-            raise core.Refused(f"{ref} is sealed. You can read files listed under the private directories, files in "
-                               f"your workspace {self.ws}, and offload refs as returned. read \".\" lists them.")
+            raise self.sealed(ref)
         got = self.give(it, self.me)
         if not got:
             raise core.Refused(f"you may not see {sorted(it.scopes)}; ask about it with offload and `returns`")

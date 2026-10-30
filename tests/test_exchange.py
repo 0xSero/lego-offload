@@ -4,6 +4,7 @@ back, and links or workspace copies do not launder a label."""
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import threading
@@ -572,10 +573,10 @@ def test_fifteenth_hunt_stays_fixed():
         assert "0134" not in cloud.read(str(t / "hr/calls.md"))["text"]        # with its country code
         os.symlink(f"{t}/keys/./out.env", t / "ws2/dot")
         assert "plain paths" in refusal(cloud, "read", path="dot")             # decided from the name
-        ns = {"os": os}                                                       # the node's runner skips links
-        exec(next(x + y for x, y in zip(transport.RUNNER.splitlines(), transport.RUNNER.splitlines()[1:] + [""])
-                  if x.startswith("walk =")), ns)
-        assert ns["walk"](str(t / "keys/out.env")) == [] and str(t / "keys/out.env") not in ns["walk"](str(t / "keys"))
+        ns = {}                                                               # the node's runner skips links
+        exec(transport.OPEN, ns)
+        walk = lambda p: [f for f, _ in ns["regular"](p)]  # noqa: E731
+        assert walk(str(t / "keys/out.env")) == [] and str(t / "keys/out.env") not in walk(str(t / "keys"))
         pop.read(str(t / "hr/staff.csv"))
         GOT.clear()
         pop.offload("Will asked for leave. May covers. frank agrees.", [], node="cloud")
@@ -922,6 +923,56 @@ def test_twentythird_hunt_stays_fixed():
             os.scandir = scan
         assert "orrin" not in listing and "prod.env" not in listing and "  z\n" in listing, listing
         for j in mid.jobs + pop.jobs + cloud.jobs:
+            j.join()
+
+
+def test_twentyfourth_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/intl.csv").write_text("name\nŁukasz Wróbel\nSøren Østergaard\nFẹ́mi Adébáyọ̀\nMehmet Yılmaz\n")
+        (t / "hr/leave.md").write_text("Lukasz Wrobel, Soren Ostergaard, Soeren, Femi Adebayo and Mehmet Yilmaz.\n")
+        (t / "hr/mehmet_yilmaz-leave.md").write_text("x\n")
+        for d in ("box/hr", "box/keys/big", "pop/out"):
+            (t / d).mkdir(parents=True)
+        (t / "box/hr/people.csv").write_text(CSV)
+        (t / "box/keys/big/a.txt").write_text("x\n")
+        os.symlink(t / "box/hr", t / "box/keys/mirror")
+        os.symlink("/etc/hosts", t / "box/hr/lnk")
+        os.mkfifo(t / "box/hr/pipe")
+        (t / "pop/out/real.txt").write_text("done\n")                         # a job's output, on this disk
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2").mkdir()
+        view = cloud.read(str(t / "hr/leave.md"))["text"]
+        assert not re.search(r"(?i)lukasz|wrobel|soe?ren|ostergaard|femi|adebayo|yilmaz", view), view
+        assert "yilmaz" not in cloud.read(".")["text"].lower()                # and the catalog still answers
+        probe = lambda q: refusal(cloud, "read", path=q).replace(q, "<p>")  # noqa: E731
+        assert len({probe(f"{t}/pop/out/{f}") for f in ("real.txt/x", "miss.txt/x", "real.txt/x/y", "real.txt",
+                                                        "real.txt.trace.json")}) == 1   # sealed: never looked at
+        node = lambda trust, n, **m: {"trust": trust, "out": str(t / n / "out"), "stage": str(t / n / "stage"), **m}  # noqa: E731
+        model = {"model": {"url": "http://x/v1", "model": "m", "base_url": "http://x/v1"}}
+        q = {**p, "scopes": {f"Box:{t}/box/hr": "hr", f"Box:{t}/box/keys": "keys", **p["scopes"]},
+             "nodes": {**p["nodes"], "Box": node(["hr", "hr~", "keys", "keys~"], "Box", **model),
+                       "mid": node(["keys", "keys~"], "mid", **model)}}
+        mid = door.Door({**q, "workspace": str(t / "ws3")}, t / "state3", "mid")
+        (t / "ws3").mkdir()
+        mid.prepare(lambda scope: lambda text: [])
+        hidden = {refusal(mid, "read", path=f"Box:{t}/box/hr/{f}").replace(f, "<f>") for f in ("lnk", "pipe", "people.csv")}
+        assert len(hidden) == 1, hidden                                         # a capital node name: still hidden
+        for q_ in (f"Box:{t}/box/keys/mirror/people.csv", f"Box:{t}/box/keys/mirror"):
+            assert "link" in refusal(mid, "offload", task="x", inputs=[q_], node="Box"), q_   # raw on its own node
+        ssh = {"ssh": "box"}                                                     # over ssh: the node-side reader
+        sh = transport._sh
+        transport._sh = lambda n, cmd, data=None, timeout=60: subprocess.run(["/bin/sh", "-c", cmd], input=data,
+                                                                            capture_output=True, timeout=timeout).stdout
+        try:
+            assert transport.files(ssh, f"{t}/box/keys/mirror") == [] and transport.files(ssh, f"{t}/box/keys") == [
+                f"{t}/box/keys/big/a.txt"]
+            assert transport.read(ssh, f"{t}/box/keys/mirror/people.csv") == b""
+        finally:
+            transport._sh = sh
+        for j in pop.jobs + cloud.jobs + mid.jobs:
             j.join()
 
 

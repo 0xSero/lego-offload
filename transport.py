@@ -8,19 +8,84 @@ import json
 import os
 import secrets
 import shlex
+import signal
 import stat
 import subprocess
 import sys
 import time
 
-RUNNER = r'''
-import json, signal, sys, time, urllib.request
+OPEN = r'''
+import os, stat, sys
+def opn(p):                                    # one component at a time from /, no link followed on the way
+    fd = os.open("/", os.O_RDONLY)
+    for x in [x for x in p.split("/") if x]:
+        try:
+            n = os.open(x, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+        finally:
+            os.close(fd)
+        fd = n
+    return fd
+def tree(top):                                 # (path, fd) of everything at or under top but folders; a link is
+    fd = opn(top)                              # never entered, each folder opened from its parent's descriptor
+    if not stat.S_ISDIR(os.fstat(fd).st_mode):
+        yield top, fd
+        return
+    stack = [(top, fd, sorted(os.listdir(fd), reverse=True))]
+    while stack:
+        p, d, names = stack[-1]
+        if not names:
+            os.close(d)
+            stack.pop()
+            continue
+        e = names.pop()
+        try:
+            n = os.open(e, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=d)
+        except OSError:
+            continue
+        if not stat.S_ISDIR(os.fstat(n).st_mode):
+            yield p + "/" + e, n
+            continue
+        try:
+            stack.append((p + "/" + e, n, sorted(os.listdir(n), reverse=True)))
+        except OSError:
+            os.close(n)
+def regular(top):                              # (path, bytes) of each regular file at or under top
+    try:
+        for f, fd in tree(top):
+            try:
+                if stat.S_ISREG(os.fstat(fd).st_mode):
+                    yield f, b"".join(iter(lambda: os.read(fd, 1 << 20), b""))
+            finally:
+                os.close(fd)
+    except OSError:
+        return
+'''
+
+NODE = OPEN + r'''
+mode, p = sys.argv[1], sys.argv[2]
+if mode == "files":
+    sys.stdout.write("".join(f + "\0" for f, _ in regular(p)))
+elif mode == "cat":
+    fd = opn(p)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        sys.exit("not a regular file")
+    for b in iter(lambda: os.read(fd, 1 << 20), b""):
+        sys.stdout.buffer.write(b)
+else:
+    try:
+        m = os.fstat(opn(p)).st_mode
+    except FileNotFoundError:
+        m = None
+    if m is not None and not (stat.S_ISDIR(m) or stat.S_ISREG(m)):
+        sys.exit("not a regular file")
+    print("none" if m is None else "dir" if stat.S_ISDIR(m) else "reg")
+'''
+
+RUNNER = OPEN + r'''
+import json, signal, time, urllib.request
 job = json.loads(sys.stdin.read())
 signal.setitimer(signal.ITIMER_REAL, job["timeout"])     # the whole job, not each read: SIGALRM ends it
-import os
-walk = lambda p: [] if os.path.islink(p) else sorted(f for r, _, fs in os.walk(p) for f in [os.path.join(r, x) for x in fs]
-                                                     if not os.path.islink(f)) if os.path.isdir(p) else [p]   # links: skipped
-docs = "".join("\n--- %s ---\n%s" % (f, open(f, errors="replace").read()) for p in job["files"] for f in walk(p))
+docs = "".join("\n--- %s ---\n%s" % (f, b.decode(errors="replace")) for p in job["files"] for f, b in regular(p))
 body = {"model": job["model"]["model"], "messages": [
     {"role": "system", "content": "You work for the owner of these files. Answer the task from the files given, or "
      "from what you know if none are. Placeholders like [PERSON_3f9a] stand for real values: use them as the values, "
@@ -53,24 +118,35 @@ def _sh(node, cmd, data=None, timeout=60):
     return r.stdout
 
 
-CAT = r'''
-import os, stat, sys
-fd, parts = os.open("/", os.O_RDONLY), [x for x in sys.argv[1].split("/") if x]
-for i, x in enumerate(parts):                  # one component at a time, no link followed
-    n = os.open(x, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | (0 if i == len(parts) - 1 else os.O_DIRECTORY), dir_fd=fd)
-    os.close(fd)
-    fd = n
-if not stat.S_ISREG(os.fstat(fd).st_mode):
-    sys.exit("not a regular file")
-for b in iter(lambda: os.read(fd, 1 << 20), b""):
-    sys.stdout.buffer.write(b)
-'''
+def _node(node, mode, path, timeout):
+    return _sh(node, "python3 -c " + shlex.quote(NODE) + f" {mode} " + shlex.quote(path), timeout=timeout)
+
+
+def kind(node, path, timeout=60):
+    """"reg", "dir", or None when there is nothing there. Raises RuntimeError on a link anywhere on
+    the way, or on any other kind of file: what a node holds is looked at without following links."""
+    if node.get("ssh"):
+        out = _node(node, "kind", path, timeout).decode().strip()
+        return None if out == "none" else out
+    try:
+        fd = nofollow(path)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise RuntimeError("a link on the way") from None
+    try:
+        m = os.fstat(fd).st_mode
+    finally:
+        os.close(fd)
+    if not (stat.S_ISDIR(m) or stat.S_ISREG(m)):
+        raise RuntimeError("not a regular file")
+    return "dir" if stat.S_ISDIR(m) else "reg"
 
 
 def read(node, path, timeout=60):
     """A regular file's bytes, with no link followed anywhere on its path, on any node."""
     if node.get("ssh"):
-        return _sh(node, "python3 -c " + shlex.quote(CAT) + " " + shlex.quote(path), timeout=timeout)
+        return _node(node, "cat", path, timeout)
     try:
         fd = nofollow(path)                                     # here: no process, never waits on a FIFO
     except OSError as e:
@@ -87,7 +163,7 @@ def files(node, root):
     """The regular files under a directory on a node, sorted."""
     if not node.get("ssh"):                                     # here: what `find -type f` lists, no process
         return sorted(_regular(root))
-    out = _sh(node, f"find {shlex.quote(root)} -type f -print0 2>/dev/null; true", timeout=120)   # names may hold newlines
+    out = _node(node, "files", root, 120)                       # there, as here: no link entered; names may hold newlines
     return sorted(f for f in out.decode(errors="replace").split("\0") if f)
 
 
@@ -195,9 +271,15 @@ def put_tree(node, dst_dir, src, timeout=60):
     unpack = f"mkdir -p {shlex.quote(dst)} && tar -C {shlex.quote(dst)} -xf -"
     sink = f"ssh -o BatchMode=yes -o ConnectTimeout=10 {shlex.quote(node['ssh'])} {shlex.quote(unpack)}" if node.get("ssh") \
         else "/bin/sh -c " + shlex.quote(unpack)
-    r = subprocess.run(["/bin/sh", "-c", f"tar -C {shlex.quote(parent)} -cf - {shlex.quote(base)} | {sink}"],
-                       capture_output=True, timeout=timeout)
-    if r.returncode:
+    p = subprocess.Popen(["/bin/sh", "-c", f"tar -C {shlex.quote(parent)} -cf - {shlex.quote(base)} | {sink}"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        p.wait(timeout)
+    except subprocess.TimeoutExpired:
+        os.killpg(p.pid, signal.SIGKILL)                       # both tars and ssh, not just the shell
+        p.wait()
+        raise
+    if p.returncode:
         raise RuntimeError("staging failed")
     return f"{dst}/{base}"
 
@@ -278,10 +360,8 @@ def run_anthropic(node, files, task, schema, out_path, keep, timeout):
     with the user's Claude login. No output cap: max_tokens is the model's own maximum."""
     import urllib.request
     import route
-    walk = lambda p: [] if os.path.islink(p) else sorted(  # noqa: E731
-        f for r, _, fs in os.walk(p) for f in [os.path.join(r, x) for x in fs] if not os.path.islink(f)) if os.path.isdir(p) else [p]
-    docs = "".join(f"\n--- {f.rsplit('/', 1)[-1].split('-', 1)[-1]} ---\n" + open(f, errors="replace").read()
-                   for p in files for f in walk(p))
+    docs = "".join(f"\n--- {f.rsplit('/', 1)[-1].split('-', 1)[-1]} ---\n" + read({}, f).decode(errors="replace")
+                   for p in files for f in sorted(_regular(p)))
     sys = ("Answer the task from the files given, or from what you know if none are. Placeholders like [PERSON_3f9a] "
            "stand for real values: use them as the values, copied exactly.")
     if schema:

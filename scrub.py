@@ -105,10 +105,23 @@ def flat(s):
     return re.sub(r"\s+", " ", s.strip())
 
 
+MARK = "\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f"   # combining marks NFKC leaves loose (Yoruba tones)
+WORD = r"[^\W\d_][^\W\d_" + MARK + r"]*(?:'[^\W\d_" + MARK + r"]+)*"   # a word, its marks and O'
+PLAIN = str.maketrans("łøđıðħŧ", "lodidht")                   # Lukasz for Łukasz: letters NFKD leaves whole
+
+
 def fold(s):
     """Per character: accents dropped, lower case. Same length as s, so offsets carry over."""
     return "".join((("".join(c for c in unicodedata.normalize("NFKD", ch) if not unicodedata.combining(c)) or ch)
-                    .lower() + "_")[0] if ch.isalpha() else ch for ch in s)
+                    .lower() + "_")[0].translate(PLAIN) if ch.isalpha() else ch for ch in s)
+
+
+def spellings(p):
+    """How a name part is written without its accents: folded, marks dropped, and Soeren for Søren."""
+    f = "".join(c for c in fold(p) if not unicodedata.combining(c))
+    wide = p.lower().translate(str.maketrans({"ø": "oe", "æ": "ae", "œ": "oe", "ß": "ss", "þ": "th", "ä": "ae", "ö": "oe",
+                                              "ü": "ue", "å": "aa"}))
+    return {f, "".join(c for c in fold(wide) if not unicodedata.combining(c))}
 
 
 class Unscrubbable(ValueError):
@@ -296,11 +309,11 @@ class Vault:
                     for f in {q, q.upper(), q.title(), q.lower()}:   # its own files: "frank" too
                         forms.setdefault(f, tok)
                 for q in {p.replace("'", ""), *p.split("'")[1:]}:   # o'brien as obrien, and brien (O Brien)
-                    if len(q) >= 4 and q.lower() not in COMMON:
-                        folded.setdefault(fold(q), tok)
+                    for f in spellings(q) if len(q) >= 4 and q.lower() not in COMMON else ():
+                        folded.setdefault(f, tok)
             b, e = r"(?<![A-Za-z0-9])", r"(s?)(?![A-Za-z0-9])"     # '_' and '.' separate words; plurals too
             digits = t["digits"]
-            short = {fold(p): tok for p, tok in t["parts"].items() if len(p) < 4 and p.lower() not in COMMON}
+            short = {f: tok for p, tok in t["parts"].items() if len(p) < 4 and p.lower() not in COMMON for f in spellings(p)}
             self._re[scope] = (joined, forms, [re.compile(b + "(" + alt(ks) + ")" + e, fl) if ks else None for ks, fl in
                                                ((t["ids"], re.I), (forms, 0))],
                                folded, re.compile("|".join(map(re.escape, sorted(folded, key=len, reverse=True)))) if folded else None,
@@ -328,8 +341,11 @@ class Vault:
 
     def _scrub(self, text, scope, keep):
         ids, forms, res, folded, inner, (digits, numbers), short = self._pattern(scope)
+        def whole(k):                                          # Yilmaz matched Yılmaz under re.I: the same id
+            return ids.get(k) or next(v for i, v in ids.items() if re.fullmatch(re.escape(i), k, re.I))
+
         def sub(r, look):
-            return self._out(text, lambda seg: r.sub(lambda m: (look[re.sub(r"[\s_.\-]+", "", m.group(1).lower())]
+            return self._out(text, lambda seg: r.sub(lambda m: (whole(re.sub(r"[\s_.\-]+", "", m.group(1).lower()))
                                                               if look is ids else look[m.group(1)]) + m.group(2), seg), keep)
         if res[0]:                                             # whole values first: E-10234 before its 10234
             text = sub(res[0], ids)
@@ -372,9 +388,9 @@ class Vault:
             return None
 
         def run(m):                                            # MeiNg: short names as whole humps; O'brien whole
-            return glue(fold(m.group(0)).replace("'", "")) or parts(m.group(0)) or "".join(short.get(fold(w)) or parts(w) or w
+            return glue(re.sub("['" + MARK + "]", "", fold(m.group(0)))) or parts(m.group(0)) or "".join(short.get(fold(w)) or parts(w) or w
                                                 for w in re.split(r"(?<=[a-z])(?=[A-Z])", m.group(0)))
-        return self._out(text, lambda seg: re.sub(r"[^\W\d_]+(?:'[^\W\d_]+)*", run, seg), keep)
+        return self._out(text, lambda seg: re.sub(WORD, run, seg), keep)
 
     def own(self, text, fresh, scopes=()):
         """Text the caller wrote, which a lower model may have asked it to relay: replaced by rules that
