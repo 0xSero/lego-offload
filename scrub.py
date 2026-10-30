@@ -72,8 +72,10 @@ MARKS = {**dict.fromkeys(map(ord, "\u2018\u2019\u02bc\uff07\u0060\u00b4"), "'"),
 
 
 def norm(s):
-    """NFKC, invisible format characters removed, a hyphen at a line break joined."""
-    return re.sub(r"-\n\s*", "", unicodedata.normalize("NFKC", s).translate(CF).translate(MARKS))
+    """NFKC, invisible format characters removed, a hyphen at a line break joined, zq(at)corp[dot]com as written."""
+    s = re.sub(r"-\n\s*", "", unicodedata.normalize("NFKC", s).translate(CF).translate(MARKS))
+    s = re.sub(r"(?i)(?<=\w)\s*[\[({<]\s*at\s*[\])}>]\s*(?=\w)", "@", s)
+    return re.sub(r"(?i)(?<=\w)\s*[\[({<]\s*dot\s*[\])}>]\s*(?=\w)", ".", s)
 
 
 def text_of(data):
@@ -253,7 +255,7 @@ class Vault:
         `fresh`: text the caller wrote. See own()."""
         text = norm(text)
         if fresh is not None:
-            return self.own(text, fresh) if scopes else text
+            return self.own(text, fresh, set(scopes)) if scopes else text
         self.find_in(text, scopes)
         if self.dirty:
             self.save()
@@ -290,11 +292,18 @@ class Vault:
             return "".join(hump(w) for w in re.split(r"(?<=[a-z])(?=[A-Z])", w))
         return outside(text, lambda seg: re.sub(r"[^\W\d_]+", run, seg))
 
-    def own(self, text, fresh):
+    def own(self, text, fresh, scopes=()):
         """Text the caller wrote, which a lower model may have asked it to relay: replaced by rules that
         look at the text only, never at the vault, so what is replaced tells the reader nothing about
         what the vault holds. Patterns, dates, runs of capitalised words, and capitalised words that are
         not everyday words each get a placeholder of their own, kept in `fresh` for the way back."""
+        def keep(t):                                           # placeholders it was given; any other is text
+            return t in fresh or self.v["scope"].get(t) in scopes
+
+        def outside(text, f):
+            parts = re.split(r"(" + TOKEN.pattern.replace("(", "(?:") + r")", text)
+            return "".join(p if i % 2 and keep(p) else f(p) for i, p in enumerate(parts))
+
         def tok(kind, raw):
             key = f"{kind}|{fold(flat(raw))}"
             if key not in fresh:
@@ -307,12 +316,17 @@ class Vault:
         text = outside(text, lambda seg: DATE.sub(lambda m: tok("DATE", m.group(0)), seg))
         text = outside(text, lambda seg: re.sub(r"(?<![\w])\d(?:[\s().\-/_,]{0,3}\d){3,}(?![\w])",   # 4+ digits, any way
                                                 lambda m: tok("NUM", m.group(0)), seg))
+        text = outside(text, lambda seg: re.sub(r"(?<![^\W_])(?=[^\W_]*\d)(?=[^\W_]*[^\W\d_])[^\W_]{3,}",   # e10234
+                                                lambda m: tok("ID", m.group(0)), seg))
+        start = r"(?:^|(?<=[.!?:;]\s)|(?<=[.!?:;]\s\s)|(?<=\n)|(?<=[-*#>]\s))"   # where a capital means nothing
+        honor = r"(?<!\bMr\.\s)(?<!\bMs\.\s)(?<!\bDr\.\s)(?<!\bMrs\.\s)(?<!\bMr\s)(?<!\bMs\s)(?<!\bDr\s)(?<!\bDear\s)"
+        text = outside(text, lambda seg: re.sub(start + honor + r"([A-Z][\w'-]*)", lambda m: "\0" + m.group(1), seg))
         text = outside(text, lambda seg: re.sub(r"(?<![\w'])(?:[A-Z][\w'-]*[ \t]+)+[A-Z][\w'-]*(?![\w'])",
                                                 lambda m: tok("NAME", m.group(0)), seg))
-        text = outside(text, lambda seg: re.sub(r"(?<![\w'])[\w'-]*[A-Z][\w'-]*", lambda m: m.group(0) if everyday(
-            m.group(0)) else tok("NAME", m.group(0)), seg))
-        return outside(text, lambda seg: re.sub(r"[^\W\d_]{4,}", lambda m: m.group(0) if word(m.group(0))   # zorbina_letter
-                                                else tok("NAME", m.group(0)), seg))
+        text = outside(text, lambda seg: re.sub(r"(\0?)((?<![\w'])[\w'-]*[A-Z][\w'-]*)", lambda m: m.group(2) if m.group(1)
+                                                and everyday(m.group(2)) else tok("NAME", m.group(2)), seg))
+        return outside(text, lambda seg: re.sub(r"[^\W\d_]+", lambda m: m.group(0) if word(m.group(0))   # zorbina, mei, 王伟
+                                                else tok("NAME", m.group(0)), seg).replace("\0", ""))
 
     def scrub_name(self, name, scopes, fresh=None):
         """A file name: whole first (emails, numbers), then piece by piece, `alice_nguyen-review.md` ->
@@ -363,6 +377,9 @@ try:
     WORDS = {w.strip() for w in open("/usr/share/dict/words") if w[:1].islower()}
 except OSError:
     WORDS = set()
+WORDS |= set("paid has does doesn isn wasn didn don won can't email emails json csv tsv md txt py js ts pdf url api hr "
+             "cc todo html http https www com org net io dataset vs etc eg ie ok id ids faq ceo cto cfo vp hq usd eur "
+             "gbp kb mb gb ssh cli gpu cpu llm".split())   # what a short web2 lacks
 
 
 def word(w):
@@ -370,7 +387,7 @@ def word(w):
     w = w.lower()
     return w in WORDS or any(w.endswith(a) and w[:-len(a)] + b in WORDS for a, b in (
         ("s", ""), ("es", ""), ("ies", "y"), ("ed", ""), ("ed", "e"), ("ing", ""), ("ing", "e"), ("ly", ""),
-        ("er", ""), ("ers", ""), ("'s", ""), ("ising", "ize"), ("ise", "ize"), ("ised", "ize")))
+        ("er", ""), ("ers", ""), ("'s", ""), ("ising", "ize"), ("ise", "ize"), ("ised", "ize"), ("est", ""), ("iest", "y")))
 
 
 def everyday(w):

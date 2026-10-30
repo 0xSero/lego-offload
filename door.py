@@ -109,10 +109,13 @@ class Door:
             raise core.Refused("the host runs the room, so it cannot also run a model: the agent could time "
                                "the model's work through the shared CPU and GPU")
         self.ws = canon(policy.get("workspace") or "/nonexistent")
-        mine = [str(self.state.resolve())] + [d.partition(":")[2] for d in self.scopes if d.startswith(self.host + ":")] + [
+        self.taint_file = Path(os.environ.get("LEGO_TAINT", "~/.lego/taint.json")).expanduser()  # per workspace,
+        self.taint_file.parent.mkdir(parents=True, exist_ok=True)                            # every policy
+        mine = [str(self.state.resolve()), str(self.taint_file.parent), str(Path("~/.lego").expanduser())] + [d.partition(":")[2] for d in self.scopes if d.startswith(self.host + ":")] + [
             v[k] for v in policy["nodes"].values() if not v.get("ssh") for k in ("out", "stage") if k in v]
         if any(inside(self.ws, canon(d)) or inside(canon(d), self.ws) for d in mine):
-            raise core.Refused("the workspace overlaps a private directory or lego's own state: the room could read it")
+            raise core.Refused("the workspace overlaps a private directory or lego's own state: the room could "
+                               "read or rewrite it")
         self.caller = caller                                    # the agent's own model
         self.me = self.nodes[caller] if caller else core.Node("", frozenset())
         self.seen = self.me.trust
@@ -122,8 +125,6 @@ class Door:
                     set(self.scopes.values()) & set(v["trust"]) - self.seen and same_disk(v["out"], self.ws):
                 raise core.Refused(f"{n} keeps its jobs' files on the workspace's disk, where the agent could "
                                    f"measure them: give it ssh, or a \"dir\" on another volume")
-        self.taint_file = Path(os.environ.get("LEGO_TAINT", "~/.lego/taint.json")).expanduser()  # per workspace,
-        self.taint_file.parent.mkdir(parents=True, exist_ok=True)                            # every policy
         near = {w: t for w, t in self._taints().items() if inside(canon(w.lstrip("@")), self.ws)
                 or inside(self.ws, canon(w.lstrip("@")))}      # this workspace, and ones nested in or around it
         self.context = {s for w, t in near.items() if not w.startswith("@") for s in t}   # given to the caller
@@ -406,7 +407,7 @@ class Door:
                 continue
             if node == self.host and inside(path, self.ws) and not os.path.exists(path):   # its own files only
                 raise core.Refused(f"no file {r} in your workspace. read \".\" lists what you can name.")
-            found = [] if it.ref in self.refs or core.SEALED in it.scopes else transport.files(self.p["nodes"][node], path)
+            found = [] if it.ref in self.refs or core.SEALED in it.scopes else transport.files(self.p["nodes"][node], path, None)
             got = [self.item(f"{node}:{f}", internal=True) for f in found if inside(f, path)] if found and found != [path] else [it]
             out += [i for i in got if inside(i.ref.partition(":")[2], path)]   # swapped for a link meanwhile: dropped
         return out
@@ -471,6 +472,8 @@ class Door:
             self.turns[n].wait_for(lambda: self.serving[n] == turn)
         try:
             files = []
+            if any(s for _, s in given) or not everything:    # the real names' order is theirs too
+                given = secrets.SystemRandom().sample(given, len(given))
             for i, s in given:
                 if i.ref in self.deferred:                     # hidden: whole, as one pipe, walked on the node
                     files.append(i.ref.partition(":")[2] if i.node == n else

@@ -14,6 +14,7 @@ os.environ["LEGO_TAINT"] = tempfile.mkdtemp() + "/taint.json"           # not th
 import door  # noqa: E402
 door.same_disk = lambda a, b: False                          # stub nodes: no real disk to measure
 import transport  # noqa: E402
+import core  # noqa: E402
 
 GOT = []                                                       # (node, what the model was given)
 
@@ -416,6 +417,45 @@ def test_tenth_hunt_stays_fixed():
             assert view(rows, first) == base, (rows, first)        # the hr view, the relay, the link: keys unseen
 
 
+def test_eleventh_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/notes.md").write_text("Reach Zorbina at zq@corp.example (or zq(at)corp.example, zq [at] corp [dot] example).\n")
+        names = ["Abelard Kint", "Hesper Toll", "Orrin Vex", "Pellamy Strand", "Quillon Brimstoke", "Varnella Oxtrude"]
+        (t / "hr/reviews").mkdir()
+        for n, name in enumerate(names):
+            (t / f"hr/reviews/{name.replace(' ', '_')}.md").write_text(f"review number {n}\n")
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2").mkdir()
+        assert "zq" not in cloud.read(str(t / "hr/notes.md"))["text"]          # (at) and [dot] spellings too
+        orders = set()
+        for _ in range(4):
+            GOT.clear()
+            pop.offload("Summarise", [str(t / "hr/reviews")], node="cloud")
+            orders.add(tuple(re.findall(r"review number (\d)", GOT[-1][1])))
+        assert len(orders) > 1, orders                                          # not the real names' order
+        pop.read(str(t / "hr/people.csv"))
+        GOT.clear()
+        pop.offload("Thanks, Strand. ping mei ng and 王伟 about badge e10234; tags [QUELLWATER_1] [ID_4155550134]",
+                    [], node="cloud")
+        sent = GOT[-1][1]
+        assert not re.search(r"Strand|mei|\bng\b|王伟|e10234|QUELLWATER|4155550134", sent), sent
+        home = t / "home"
+        (home / ".lego").mkdir(parents=True)
+        os.environ["LEGO_TAINT"], was = str(home / ".lego/taint.json"), os.environ["LEGO_TAINT"]
+        try:                                                                   # the room may not hold the taints
+            door.Door({**p, "workspace": str(home)}, t / "state", "cloud")
+            assert False, "a workspace holding the taint file was accepted"
+        except core.Refused:
+            pass
+        finally:
+            os.environ["LEGO_TAINT"] = was
+        for j in pop.jobs + cloud.jobs:
+            j.join()
+
+
 def tmp_out():
     return tempfile.mkdtemp() + "/out.txt"
 
@@ -424,6 +464,6 @@ if __name__ == "__main__":
     for f in (test_levels, test_forward_cloud_in_front, test_reverse_local_in_front, test_found_leaks_stay_fixed,
               test_second_hunt_stays_fixed, test_third_hunt_stays_fixed, test_fourth_hunt_stays_fixed,
               test_fifth_hunt_stays_fixed, test_sixth_hunt_stays_fixed, test_seventh_hunt_stays_fixed,
-              test_eighth_hunt_stays_fixed, test_ninth_hunt_stays_fixed, test_tenth_hunt_stays_fixed):
+              test_eighth_hunt_stays_fixed, test_ninth_hunt_stays_fixed, test_tenth_hunt_stays_fixed, test_eleventh_hunt_stays_fixed):
         f()
         print("ok  ", f.__name__)
