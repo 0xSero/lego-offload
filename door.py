@@ -19,6 +19,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import threading
 import time
 import unicodedata
@@ -154,7 +155,17 @@ class Door:
         self.ledger_file.write_text(json.dumps(self.p.get("allowance", {})))
 
     def _taints(self):
-        return json.loads(self.taint_file.read_text()) if self.taint_file.exists() else {}
+        """Taints as this policy's scope names. A scope is recorded as its directories, so another policy
+        reusing the name for other data does not match; data no scope here holds is SEALED (no one)."""
+        ids = {}
+        for d, s in self.scopes.items():
+            ids.setdefault(s, []).append(d)
+        name = {",".join(sorted(v)): s for s, v in ids.items()}
+        t = json.loads(self.taint_file.read_text()) if self.taint_file.exists() else {}
+        return {w: [name.get(x.rstrip("~"), core.SEALED) + ("~" if x.endswith("~") else "") for x in v] for w, v in t.items()}
+
+    def _id(self, scope):
+        return ",".join(sorted(d for d, s in self.scopes.items() if s == scope.rstrip("~"))) + ("~" if scope.endswith("~") else "")
 
     def taint(self, scopes):
         """The caller was given these scopes: so were its workspace files, for this and every later session."""
@@ -167,7 +178,7 @@ class Door:
             fcntl.flock(f, fcntl.LOCK_EX)
             f.seek(0)
             t = json.loads(f.read() or "{}")
-            t[key] = sorted(set(t.get(key, [])) | set(scopes))
+            t[key] = sorted(set(t.get(key, [])) | {self._id(s) for s in scopes})
             f.seek(0), f.truncate(), f.write(json.dumps(t))
 
     def _note(self, **kw):
@@ -222,6 +233,7 @@ class Door:
         if node not in self.nodes:
             raise core.Refused(f"unknown node in {asked}")
         path = os.path.normpath(path)                          # ws/../keys is keys
+        path = self.upto(path) if node == self.host else path  # /var is /private/var; nothing inside a scope followed
         fold = lambda p: unicodedata.normalize("NFC", p).casefold()  # noqa: E731   KEYS is keys
         named = core.label(f"{node}:{fold(path)}", {fold(p) for p in self.public}, {fold(d): s for d, s in self.scopes.items()})
         named = named if core.SEALED not in named and not (node == self.host and inside(fold(path), fold(self.ws))) else None
@@ -242,6 +254,8 @@ class Door:
                 st = os.stat(path)
                 if inside(path, self.ws) and st.st_nlink > 1 and not os.path.isdir(path):
                     raise core.Refused(f"{asked} is hardlinked")
+                if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):
+                    raise core.Refused(f"{asked} is not a regular file")
                 self.inodes[f"{node}:{path}"] = (st.st_dev, st.st_ino)
         ref = f"{node}:{path}"
         scopes = self.refs[ref] if ref in self.refs else core.label(ref, self.public, self.scopes)
@@ -255,6 +269,17 @@ class Door:
             raise core.Refused(f"name files in {sorted(scopes)} by the names listed (read \".\" lists them)")
         return core.Item(ref, scopes, node)
 
+    def upto(self, path):
+        """The path with links resolved only until it reaches a private directory; the rest as written,
+        so naming a path in a scope never looks at what lies inside it."""
+        roots = [d.partition(":")[2] for d in self.scopes if d.startswith(self.host + ":")]
+        cur, parts = "/", [p for p in path.split("/") if p]
+        for k, p in enumerate(parts):
+            if any(inside(cur, r) for r in roots):
+                return os.path.join(cur, *parts[k:])
+            cur = canon(os.path.join(cur, p))
+        return cur
+
     def give(self, item, node):
         """The exchange rule: (item as `node` gets it, scrubbed?) or None."""
         if core.may_hold(node, item.scopes):
@@ -264,14 +289,19 @@ class Door:
         s = core.scrubbed(item.scopes)
         return ((core.Item(item.ref, s, item.node), True) if core.may_hold(node, s) else None)
 
-    def bytes_of(self, item, scrubbed, timeout=60, node=None):
-        """An item's bytes, scrubbed if asked. A host file is opened without following links and must
-        be the very file that was labelled."""
+    def bytes_of(self, item, scrubbed, timeout=60, node=None, data=None):
+        """An item's bytes, scrubbed if asked. A host file is opened without following links, never
+        waits (a FIFO is refused, not opened), and must be the very file that was labelled. `data`:
+        bytes already read."""
         to, (node, _, path) = node or self.me, item.ref.partition(":")
-        if node == self.host:
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        if data is not None:
+            pass
+        elif node == self.host:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             try:
                 st = os.fstat(fd)
+                if not stat.S_ISREG(st.st_mode):
+                    raise core.Refused("not a regular file")
                 if self.inodes.get(item.ref) != (st.st_dev, st.st_ino):
                     raise core.Refused("the file changed after it was labelled")
                 data = b"".join(iter(lambda: os.read(fd, 1 << 20), b""))
@@ -430,14 +460,15 @@ class Door:
         scrub_task = given[-1][1] or not everything            # names it saw in this tool's text, too
         task = self.vault.scrub(task, self.tags(ins[-1], reader), self.fresh) if scrub_task else task
         typed = set() if scrub_task else self.raw & set(self.scopes.values())   # a raw task's output may hold them
-        with self.locks[n]:                                    # one decision at a time per node
+        snap = {i.ref: self.bytes_of(i, False) for i, _ in given[:-1] if self.mine(i)}   # the caller's files, read
+        with self.locks[n]:                                    # now: the job never touches the workspace
             t0 = time.time()
             out, row, ledger, start, end = self.decide(n, [g for g, _ in given], returns, t0)
             self._note(op="offload", node=n, ref=out.ref, inputs=[i.ref for i in ins[:-1]], scopes=sorted(out.scopes),
                        scrubbed=[s for _, s in given], row=row, bits=core.bits(returns) if row == "shaped" else 0)
             self.refs[out.ref] = out.scopes | typed
             turn, self.tickets[n] = self.tickets[n], self.tickets[n] + 1
-            run = lambda: self._run(n, given[:-1], task, returns, out, row, end, turn, everything, reader)  # noqa: E731
+            run = lambda: self._run(n, given[:-1], task, returns, out, row, end, turn, everything, reader, snap)  # noqa: E731
             if row == "full":                                  # the caller may see it: the node is surely idle
                 time.sleep(max(0.0, start - time.time()))
                 r = run()
@@ -461,7 +492,7 @@ class Door:
         self._note(op="answer", ref=out.ref, answer=value)
         return {"row": "shaped", "answer": value, "ref": out.ref, "allowance_left": ledger}
 
-    def _run(self, n, given, task, returns, out, row, end, turn, everything, reader):
+    def _run(self, n, given, task, returns, out, row, end, turn, everything, reader, snap):
         """One job on node n. Staging and the model call both stop by `end`, the bound its slot was
         booked with, so no later job's timing depends on how long this one would have run."""
         node = self.p["nodes"][n]
@@ -484,7 +515,7 @@ class Door:
                 name = name if everything and not s else self.vault.scrub_name(
                     name, self.tags(i, reader), self.fresh if self.mine(i) else None)
                 files.append(i.ref.partition(":")[2] if i.node == n and not s else
-                             transport.put(node, node["stage"], name, self.bytes_of(i, s, left(), reader), left()))
+                             transport.put(node, node["stage"], name, self.bytes_of(i, s, left(), reader, snap.get(i.ref)), left()))
             core.run([core.move(g, self.nodes[n]) for g, _ in given], self.nodes[n], out.ref)
             r = transport.run_job(node, files, task, returns, out.ref.partition(":")[2], keep=row == "receipt",
                                   timeout=left(), salt=core.salt(self.salt_key, out.scopes))

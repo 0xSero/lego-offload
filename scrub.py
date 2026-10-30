@@ -159,6 +159,8 @@ class Vault:
                 self._put(t["ids"], bare, token)
             digits = re.sub(r"\D", "", value)
             forms = {digits, digits[-10:]} if len(digits) >= 7 else set()   # 4155550134, (415) 555 0134, +1 ...
+            if kind == "PHONE" and len(digits) >= 10:
+                forms |= {digits[-7:], digits[-8:]}             # 555-0134, 7946 0958
             tail = re.search(r"\d{4,}$", bare)
             if kind == "ID" and tail:                           # E-10234 called "staff no. 10234" or "E 102 34"
                 forms.add(tail.group(0))
@@ -170,11 +172,17 @@ class Vault:
             if kind in ("PHONE", "SSN", "CARD", "IBAN", "ID", "DOB"):
                 for d in forms:
                     self._put(t["digits"], d, token)
+        local = value.split("@")[0].lower() if kind == "EMAIL" else ""
+        if len(local) >= 2 and not word(local) and local not in COMMON:   # jdoe1985 at gmail dot com
+            self._put(t["ids"], local, token)
         if kind == "ADDRESS":                                          # "41 Larkspur Mews" and "Oakhollow" too
             for part in re.split(r"\s*,\s*", value):
                 for p in (part, re.sub(r"^\d{1,5}[A-Za-z]?,?\s+", "", part)):   # "Larkspur Mews" too
                     if len(p) >= 3 and not p.isdigit():
                         self._put(t["ids"], p.lower(), token)
+                        street = p.rsplit(" ", 1)[0] if " " in p else ""     # "Larkspur" too
+                        if len(street) >= 4 and not street[:1].isdigit():   # its own files: over-scrub, never under
+                            self._put(t["ids"], street.lower(), token)
         if kind == "PERSON":                                           # "Alice" or "Nguyen" alone name her too
             for part in {p for sep in (r"[\s,]+", r"[\s,-]+") for p in re.split(sep, value)}:
                 part = part.strip(".'\"")
@@ -235,7 +243,7 @@ class Vault:
             forms, folded = {}, {}
             for p, tok in t["parts"].items():
                 for q in {p, p.replace("'", "")}:              # O'Brien, OBrien
-                    for f in {q, q.upper(), q.title()} | ({q.lower()} if q.lower() not in COMMON else set()):
+                    for f in {q, q.upper(), q.title(), q.lower()}:   # its own files: "frank" too
                         forms.setdefault(f, tok)
                 if len(p) >= 4 and p.lower() not in COMMON:
                     folded.setdefault(fold(p), tok)
@@ -310,6 +318,10 @@ class Vault:
                 fresh[key] = f"[{kind}_{secrets.token_hex(4)}]"
                 fresh[fresh[key]] = raw
             return fresh[key]
+        back = sorted(fresh.get("\0back", ()), key=len, reverse=True)   # what lego turned back from placeholders
+        if back:
+            text = outside(text, lambda seg: re.sub(r"(?i)(?<![\w])(?:" + "|".join(map(re.escape, back)) + r")(?![\w])",
+                                                    lambda m: tok("NAME", m.group(0)), seg))
         for kind, (p, check) in PATTERNS.items():
             text = outside(text, lambda seg: re.sub(p, lambda m: m.group(0) if check and not check(
                 m.group(1) if m.lastindex else m.group(0)) else tok(kind, m.group(0)), seg))
@@ -324,7 +336,7 @@ class Vault:
         text = outside(text, lambda seg: re.sub(r"(?<![\w'])(?:[A-Z][\w'-]*[ \t]+)+[A-Z][\w'-]*(?![\w'])",
                                                 lambda m: tok("NAME", m.group(0)), seg))
         text = outside(text, lambda seg: re.sub(r"(\0?)((?<![\w'])[\w'-]*[A-Z][\w'-]*)", lambda m: m.group(2) if m.group(1)
-                                                and everyday(m.group(2)) else tok("NAME", m.group(2)), seg))
+                                                and m.group(2).lower() in STARTERS else tok("NAME", m.group(2)), seg))
         return outside(text, lambda seg: re.sub(r"[^\W\d_]+", lambda m: m.group(0) if word(m.group(0))   # zorbina, mei, 王伟
                                                 else tok("NAME", m.group(0)), seg).replace("\0", ""))
 
@@ -349,7 +361,11 @@ class Vault:
             t = m.group(0)
             if fresh and t in fresh:
                 return fresh[t]
-            return self.v["real"][t] if t in self.v["real"] and self.v["scope"].get(t) in set(allowed) else t
+            if t in self.v["real"] and self.v["scope"].get(t) in set(allowed):
+                if fresh is not None:                          # given back: if the caller relays it, it goes as
+                    fresh.setdefault("\0back", set()).add(self.v["real"][t])   # a placeholder, whatever it is
+                return self.v["real"][t]
+            return t
         return re.sub(r"(?<![A-Za-z0-9])" + TOKEN.pattern + r"(?![A-Za-z0-9])", back, text)
 
 
@@ -380,6 +396,17 @@ except OSError:
 WORDS |= set("paid has does doesn isn wasn didn don won can't email emails json csv tsv md txt py js ts pdf url api hr "
              "cc todo html http https www com org net io dataset vs etc eg ie ok id ids faq ceo cto cfo vp hq usd eur "
              "gbp kb mb gb ssh cli gpu cpu llm".split())   # what a short web2 lacks
+
+
+STARTERS = set("""a an the this that these those it its i we you he she they my our your their there here what
+which who whom whose when where why how if then else so but and or nor not no yes also only just please now next
+first second third last finally note see use using write read summarise summarize compute count list find check tell
+give make put take get keep send save add remove create update show return answer explain describe compare rank sort
+group total sum average calculate draft edit review fix ask call reply open close run start stop do don't is are was
+were be been has have had can could will would should may might must shall all each every any some most many few
+none both either neither more less after before during while since until because although though however therefore
+thus otherwise instead for from in on at by with without about into onto over under between among per as to of
+thanks thank hi hello dear regards best ok okay done good great yes sure result results summary total name names""".split())
 
 
 def word(w):

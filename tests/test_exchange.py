@@ -456,6 +456,52 @@ def test_eleventh_hunt_stays_fixed():
             j.join()
 
 
+def test_twelfth_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/staff.csv").write_text("name,email,phone,address\nFrank Brown,jdoe1985@gmail.com,415-555-0134,"
+                                        "41 Larkspur Mews\nAmber Baker,ab@corp.example,415-555-7777,2 Elm Row\n"
+                                        "Rob Baker,rb@corp.example,415-555-8888,3 Elm Row\n")
+        (t / "hr/notes.md").write_text("frank wants a raise; brown is on leave. Call 555-0134 or write jdoe1985 at "
+                                       "gmail dot com, near Larkspur.\n")
+        (t / "keys/ssh").mkdir()
+        os.symlink(t / "hr/people.csv", t / "keys/staff.csv")              # a link inside keys, into hr
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2").mkdir()
+        view = cloud.read(str(t / "hr/notes.md"))["text"]
+        assert not re.search(r"frank|brown|0134|jdoe1985|Larkspur", view), view
+        os.symlink(t / "keys", t / "ws2/k")
+        alt = str(t).replace("/private/var/", "/var/") if str(t).startswith("/private/var/") else str(t)
+        same = {json.loads(refusal(cloud, "read", path=q)).get("refused", "").split(" ")[0] + str("you may not see" in refusal(cloud, "read", path=q))
+                for q in (str(t / "keys/staff.csv"), str(t / "keys/nope"), alt + "/keys/staff.csv", alt + "/keys/nope",
+                          "k/staff.csv", "k/nope")}
+        assert all(x.endswith("True") for x in same), same                 # one answer, from the name alone
+        os.mkfifo(t / "ws2/probe")                                          # a FIFO is refused at once
+        assert "regular file" in refusal(cloud, "offload", task="x", inputs=["probe"])
+        GOT.clear()                                                         # a name lego gave back to pop, relayed
+        r = pop.offload("Repeat the name of the person you see.", [str(t / "hr/staff.csv")], node="cloud")
+        for j in pop.jobs:
+            j.join()
+        back = pop.vault.unscrub(re.findall(r"\[PERSON_[0-9a-f]+\]", GOT[-1][1])[0], {"hr"}, pop.fresh)
+        GOT.clear()
+        pop.offload(f"{back} is fine. Baker agrees.", [], node="cloud")
+        assert back not in GOT[-1][1] and "Baker" not in GOT[-1][1], GOT[-1][1]
+        os.environ["LEGO_TAINT"], was = str(t / "taint2.json"), os.environ["LEGO_TAINT"]
+        try:                                                                # 'hr' in another policy is other data
+            other = {**p, "scopes": {d.replace("/hr", "/hr2"): s for d, s in p["scopes"].items()}}
+            (t / "hr2").mkdir()
+            pop2 = door.Door({**p, "workspace": str(t / "ws3")}, t / "state", "pop")
+            (t / "ws3").mkdir()
+            pop2.taint({"hr"})
+            assert door.Door({**other, "workspace": str(t / "ws3")}, t / "state2", "cloud").held - {"hr", "hr~"}
+        finally:
+            os.environ["LEGO_TAINT"] = was
+        for j in pop.jobs + cloud.jobs:
+            j.join()
+
+
 def tmp_out():
     return tempfile.mkdtemp() + "/out.txt"
 
@@ -464,6 +510,6 @@ if __name__ == "__main__":
     for f in (test_levels, test_forward_cloud_in_front, test_reverse_local_in_front, test_found_leaks_stay_fixed,
               test_second_hunt_stays_fixed, test_third_hunt_stays_fixed, test_fourth_hunt_stays_fixed,
               test_fifth_hunt_stays_fixed, test_sixth_hunt_stays_fixed, test_seventh_hunt_stays_fixed,
-              test_eighth_hunt_stays_fixed, test_ninth_hunt_stays_fixed, test_tenth_hunt_stays_fixed, test_eleventh_hunt_stays_fixed):
+              test_eighth_hunt_stays_fixed, test_ninth_hunt_stays_fixed, test_tenth_hunt_stays_fixed, test_eleventh_hunt_stays_fixed, test_twelfth_hunt_stays_fixed):
         f()
         print("ok  ", f.__name__)
