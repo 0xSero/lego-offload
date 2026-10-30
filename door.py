@@ -369,8 +369,12 @@ class Door:
             if all(self.give(i, self.nodes[n]) for i in items):
                 return n
         need = frozenset().union(*(i.scopes for i in items))
-        held = " (your context holds what you have read, and it goes with every task)" if self.context else ""
-        raise core.Refused(f"no model may be given {sorted(need)}{held}")
+        block = {n: sorted(s for s in need - {core.SEALED} if self.level(s.rstrip("~"), self.nodes[n]) == "nothing")
+                 for n in names}
+        why = "; ".join(f"{n} sees nothing of {', '.join(b)}" for n, b in block.items() if b)
+        held = (f". Your context holds {', '.join(sorted(s for s in self.context if '~' not in s))} from what you read, "
+                "and it goes with every task: do the rest yourself, or start a new workspace") if self.context else ""
+        raise core.Refused(f"no model may be given {sorted(need)}" + (f" ({why})" if why else "") + held)
 
     def decide(self, n, items, returns, t):
         """Everything about a call, from labels, the ledger and node n's queue at time t, before any
@@ -496,7 +500,10 @@ class Door:
                 "Other models: " + ("; ".join(f"{n} (sees " + ", ".join(f"{s}: {self.level(s, self.nodes[n])}"
                                                                        for s in kinds) + ")" for n in others) or "none") +
                 ".\nWhat you read stays in your context: every task you offload carries it, and a model that may not "
-                "see it refuses the task for the rest of this session.\n"
+                "see it refuses the task for the rest of this session. Read only what the task needs" +
+                "".join(f"; reading {s} means {', '.join(n for n in others if self.level(s, self.nodes[n]) == 'nothing')} "
+                        f"can take no more tasks from you" for s in kinds if self.level(s) != "nothing" and
+                        any(self.level(s, self.nodes[n]) == "nothing" for n in others)) + ".\n"
                 "`offload` gives another model your task text and the `inputs` files, nothing else: write complete "
                 "instructions and list every file (a directory stands for all its files). If you could see all the "
                 "inputs, you get the full result. On inputs you may not see, pass `returns`, one small typed answer "
