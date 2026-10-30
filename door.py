@@ -461,6 +461,11 @@ class Door:
         elif m == "tools/call":
             a, name = msg["params"].get("arguments", {}), msg["params"].get("name")
             try:
+                if isinstance(a, dict) and isinstance(a.get("inputs"), str):      # one path, or a list sent as text
+                    try:
+                        a["inputs"] = json.loads(a["inputs"]) if a["inputs"].lstrip().startswith("[") else [a["inputs"]]
+                    except ValueError:
+                        pass
                 if not isinstance(a, dict) or not isinstance(a.get("inputs") or [], list):
                     raise core.Refused("arguments must be {task, inputs: [..], returns, node}")
                 if name == "read":

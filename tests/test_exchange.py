@@ -210,6 +210,8 @@ def test_fourth_hunt_stays_fixed():
         v.learn("pop:/x/a.csv", b"name\nJos\xc3\xa9 N\xc3\xba\xc3\xb1ez\n", ["hr"], also="hr Varnella-Oxtrude.md")
         out = v.scrub("zorbinaQuellwater_salary ZorbinaQuellwater2 quillonbrimstoke Jose Nunez", {"hr"})
         assert not leaked(out) and "Jose" not in out and "Nunez" not in out, out
+        for inputs in ("people.csv", '["people.csv"]'):                         # a path or a list sent as text
+            assert "must be" not in refusal(d, "offload", task="x", inputs=inputs)
 
 
 if __name__ == "__main__":
