@@ -25,10 +25,14 @@ def _bin(name):
     return os.path.realpath(found)
 
 
-def claude(home, route_url, door_url, args):
+def claude(home, route_url, door_url, args, ws):
     mcp = Path(home, "mcp.json")
     mcp.write_text(json.dumps({"mcpServers": {"lego": {"type": "http", "url": door_url}}}))
     extra = [] if "--allowedTools" in args else ["--allowedTools", "mcp__lego__offload"]
+    Path(home, ".claude.json").write_text(json.dumps({                 # skip onboarding: it dials api.anthropic.com
+        "hasCompletedOnboarding": True, "bypassPermissionsModeAccepted": True,
+        "projects": {os.path.realpath(ws): {"hasTrustDialogAccepted": True}},
+        "customApiKeyResponses": {"approved": [PLACEHOLDER[-20:]], "rejected": []}}))
     b = _bin("claude")
     return [b, *args, "--mcp-config", str(mcp), "--strict-mcp-config", *extra], os.path.dirname(b), {
         "ANTHROPIC_BASE_URL": route_url, "ANTHROPIC_API_KEY": PLACEHOLDER, "CLAUDE_CODE_TMPDIR": f"{home}/tmp",
@@ -36,7 +40,7 @@ def claude(home, route_url, door_url, args):
         "MCP_TOOL_TIMEOUT": "900000"}
 
 
-def codex(home, route_url, door_url, args):
+def codex(home, route_url, door_url, args, ws):
     user = Path("~/.codex/config.toml").expanduser()
     cfg = tomllib.loads(user.read_text()) if user.exists() else {}
     keep = [f'{k} = "{cfg[k]}"' for k in ("model", "model_reasoning_effort") if k in cfg]
@@ -50,7 +54,7 @@ def codex(home, route_url, door_url, args):
     return [b, *args], os.path.dirname(os.path.dirname(b)), {"CODEX_HOME": f"{home}/.codex", "LEGO_ROUTE_KEY": PLACEHOLDER}
 
 
-def cursor(home, route_url, door_url, args):
+def cursor(home, route_url, door_url, args, ws):
     d = Path(home, ".cursor")
     d.mkdir()
     cfg = json.loads(Path("~/.cursor/cli-config.json").expanduser().read_text())    # preferences, no secrets
@@ -66,7 +70,7 @@ def cursor(home, route_url, door_url, args):
                                                               "AGENT_CLI_CREDENTIAL_STORE": "file"}
 
 
-def cline(home, route_url, door_url, args):
+def cline(home, route_url, door_url, args, ws):
     pkg = Path(_bin("cline")).parent.parent                              # npm wrapper -> compiled binary
     b = str(next(pkg.glob("node_modules/@cline/cli-darwin-*/bin/cline")).resolve())
     old = Path("~/.cline/data/globalState.json").expanduser()

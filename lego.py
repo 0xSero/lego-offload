@@ -43,7 +43,8 @@ def session(policy, state, agent, args, capture=None, timeout=None, tty=False):
     dp, rp = ds.server_address[1], rs.server_address[1]
     home = tempfile.mkdtemp(prefix="lego-home-")
     try:
-        argv, install, env = adapter(home, f"http://127.0.0.1:{rp}", f"http://127.0.0.1:{dp}/mcp", list(args))
+        argv, install, env = adapter(home, f"http://127.0.0.1:{rp}", f"http://127.0.0.1:{dp}/mcp", list(args),
+                                     policy["workspace"])
         return room.launch(argv[0], argv[1:], policy["workspace"], home, rp, dp, env=env, timeout=timeout,
                            agent_dir=install, tty=tty)
     finally:

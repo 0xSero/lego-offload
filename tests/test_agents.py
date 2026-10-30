@@ -46,7 +46,7 @@ def main():
         home = tempfile.mkdtemp(prefix="lego-test-home-")
         try:
             try:
-                argv, install, env = adapter(home, ROUTE, DOOR, ["-p", "hi"])
+                argv, install, env = adapter(home, ROUTE, DOOR, ["-p", "hi"], home)
             except SystemExit as e:
                 print(f"skip {name:7} {e}")
                 continue
