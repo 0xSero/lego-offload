@@ -178,14 +178,14 @@ The reply row is chosen from labels, the ledger and the node's queue alone, befo
 | File | Lines | What |
 |-|-|-|
 | `core.py` | 201 | The seven bricks, the cache salt and the scrubbed twin of a scope. Pure: no I/O, no clock, no network |
-| `door.py` | 813 | The simple policy, the exchange rule, and the `read` and `offload` tools, served as MCP over HTTP on localhost. Asks `core.py` at every step |
+| `door.py` | 834 | The simple policy, the exchange rule, and the `read` and `offload` tools, served as MCP over HTTP on localhost. Asks `core.py` at every step |
 | `scrub.py` | 572 | The vault: identifiers learned from the private files (patterns with checksums, table columns, a local model), stable placeholders, and back again per scope |
 | `transport.py` | 407 | Carries out moves and runs over ssh, or calls a cloud model with the user's login. Constrained JSON decoding and the scope's cache salt |
 | `route.py` | 177 | Localhost proxy to the agent's model. Strips the room's placeholder, injects the real credential, captures every exchange decompressed |
 | `room.py` + `room/room.sb` | 40 + 110 | The sandbox. Deny by default: the workspace, a throwaway HOME, the agent's install directory, and the two ports |
 | `agents.py` | 128 | One adapter per agent: config pointing the model at the route and tools at the door |
 | `lego.py` + `lego` | 143 + 3 | The CLI. Picks the agent's own model, fills the vault, one session at a time per policy and per workspace |
-| **implementation** | **2,558** | app, tests and verification excluded |
+| **implementation** | **2,579** | app, tests and verification excluded |
 | `app.py` + `app.html` | 157 + 141 | `lego app`: a local page to run tasks and watch the door |
 | `verify/` | | `Lego.lean` (the proof), `twin.py` (Lean vs the door), `sim.bend` + `sim_ref.py` (the simulation). See [`verify/README.md`](verify/README.md) |
 | `tests/` | | `test_core.py`, `test_queue.py`, `test_exchange.py`, `test_room.py`, `test_agents.py`, `e2e.py`, `twoway.py`, `contention.py`, `traces.py`, `report.py` |
@@ -223,7 +223,7 @@ All numbers come from the last `./run`. [`results/REPORT.md`](results/REPORT.md)
 
 7/7 tasks done, 0 of 76 canaries in any byte the cloud got. In reverse mode the cloud saw only placeholders (`[PERSON_3f9a]`, `[EMAIL_51c0]`) and omp got the real names back. Most of the forward bytes are Claude Code's own system prompt and tools.
 
-**Leak hunts.** Thirty-three rounds of adversarial agents (a forward attacker, a reverse attacker, and a skeptic that reproduces each claim offline; round 17 added an attacker on the optimisation diff) attacked the door between real runs. They confirmed 13, 4, 11, 6, 6, 11, 5, 7, 6, 7, 4, 6, 3, 0, 7, 2, 5, 5, 4, 8, 4, 8, 5, 7, 6, 3, 5, 4, 2, 4, 6, 4 and 4 leaks (round 26 ran without its reverse attacker, whose output a content filter blocked). All but four are fixed and have a case in `tests/test_exchange.py` (`test_*_hunt_stays_fixed`); the four are the limits listed below. Examples: a model's output on raw data was handed back scrubbed (whitespace in a schema-valid JSON reply carried the names); an unscrubbed reply was labelled only `hr~`; file names held emails and SSNs; `read` told an existing private path from a missing one.
+**Leak hunts.** Thirty-four rounds of adversarial agents (a forward attacker, a reverse attacker, and a skeptic that reproduces each claim offline; round 17 added an attacker on the optimisation diff) attacked the door between real runs. They confirmed 13, 4, 11, 6, 6, 11, 5, 7, 6, 7, 4, 6, 3, 0, 7, 2, 5, 5, 4, 8, 4, 8, 5, 7, 6, 3, 5, 4, 2, 4, 6, 4, 4 and 1 leaks (round 26 ran without its reverse attacker, whose output a content filter blocked). All but four are fixed and have a case in `tests/test_exchange.py` (`test_*_hunt_stays_fixed`); the four are the limits listed below. Examples: a model's output on raw data was handed back scrubbed (whitespace in a schema-valid JSON reply carried the names); an unscrubbed reply was labelled only `hr~`; file names held emails and SSNs; `read` told an existing private path from a missing one.
 
 **Real models (one way, earlier):** 33/33 cases pass: 4 agents × 8 cases, plus the scripted attacker.
 

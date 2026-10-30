@@ -1346,6 +1346,35 @@ def test_thirty_third_hunt_stays_fixed():
             transport._sh = sh
 
 
+def test_thirty_fourth_hunt_stays_fixed():
+    notes = " ".join("".join(chr(98 + (i * 7 + j * 3) % 24) for j in range(9)) for i in range(6000))
+    def world(names):                                                          # a read's time: the same whatever
+        with tempfile.TemporaryDirectory() as tmp:                             # the hidden names are
+            t, p = setup(os.path.realpath(tmp))
+            (t / "hr/people.csv").write_text("name,salary\n" + "".join(f"{n},100\n" for n in names))
+            (t / "hr/notes.txt").write_text(notes)
+            pop = door.Door(p, t / "state", "pop")
+            pop.prepare(lambda scope: lambda text: [])
+            cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+            (t / "ws2").mkdir()
+            cloud.prepare(lambda scope: lambda text: [])
+            cloud.read(".")
+            alias = next(a for a in cloud.alias if "notes" in a)
+            live, cloud.vault.scrub = cloud.vault.scrub, lambda *a, **k: 1 / 0  # a request scrubs nothing: it looks
+            try:                                                                 # the view up
+                took = []
+                for _ in range(9):
+                    t0 = time.perf_counter()
+                    assert cloud.read(alias)["row"] == "scrubbed"
+                    took.append(time.perf_counter() - t0)
+                assert "100" in cloud.read(next(a for a in cloud.alias if "people" in a))["text"]
+            finally:
+                cloud.vault.scrub = live
+            return sorted(took)[4]
+    a, b = world(["Will Brown", "Rose Green"]), world(["Will Bronx", "Rose Green"])
+    assert abs(a - b) < max(a, b) * 0.5 + 0.002, (a, b)                       # it was 22 ms against 217
+
+
 def test_own_precision():
     """Caller text: everyday and technical words stay as written; names, in any of the forms the hunts used, do not."""
     import scrub

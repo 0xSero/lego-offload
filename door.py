@@ -199,6 +199,7 @@ class Door:
         self.found = {}                                        # scope dir -> its files, listed before the agent starts
         self.learned = set()                                    # files the catalog found in the vault
         self.deferred = set()                                   # hidden inputs, expanded only inside their job
+        self.views, self.names = {}, {}                         # scrubbed views and names, made at the start
         self.snap = {}                                          # files on other machines, as lego found them
         self.staged = {}                                        # (node, from, scope dir) -> its copy there
         self.fresh = {}                                         # the caller's own words -> placeholders, and back
@@ -268,13 +269,14 @@ class Door:
         """Before anything crosses: learn the identifiers of every private file some model may not see raw.
         find(scope) gives a function that lists identifiers with a local model trusted with that scope."""
         scrubbed = {s for n, v in self.p["nodes"].items() if runnable(v) for s in set(self.scopes.values()) - self.nodes[n].trust}
+        datas = {}
         for d in [d for d, s in self.scopes.items() if s in scrubbed]:
             node, _, root = d.partition(":")
             f = find(self.scopes[d]) if find else None
             if strict and not f:
                 raise core.Refused(f"{self.scopes[d]} is hidden from some model, but no local model sees it raw to find its names")
             for path in self.found.setdefault(d, transport.files(self.p["nodes"][node], root)):
-                data = transport.read(self.p["nodes"][node], path, 600)
+                data = datas[f"{node}:{path}"] = transport.read(self.p["nodes"][node], path, 600)
                 self.learn(f"{node}:{path}", data, self.scopes[d], f)
                 if self.p["nodes"][node].get("ssh"):           # on another machine: its scrubbed views are made
                     self.snap[f"{node}:{path}"] = data         # from this copy, so nothing crosses at request time
@@ -283,6 +285,11 @@ class Door:
             self.found.setdefault(d, transport.files(self.p["nodes"][node], root))
         for s in scrubbed:                                     # matchers built now, from what was learned: a
             self.vault._pattern(s)                             # first call's time would show how much it holds
+        for d in [d for d, s in self.scopes.items() if s in scrubbed]:   # and every view, now: how long scrubbing
+            node, _, root = d.partition(":")                   # takes depends on what the tables hold, so a
+            for path in self.found[d]:                         # request only looks one up
+                self.views[f"{node}:{path}", self.scopes[d]] = self.view(datas[f"{node}:{path}"], {self.scopes[d]})
+                self.names[path, self.scopes[d]] = self.vault.scrub_name(path[len(root):], [self.scopes[d]])
 
     def learn(self, ref, data, scope, f):
         """A private file's identifiers, its path's included (a name can sit in a file name only). Only
@@ -435,13 +442,26 @@ class Door:
             raise core.Refused("a private file changed or appeared after lego started: restart lego to learn it")
         if not scrubbed:
             return data
+        tags = self.tags(item, to)
+        if not self.mine(item) and len(tags) == 1 and (item.ref, *tags) in self.views:
+            ok, view = self.views[(item.ref, *tags)]
+            if not ok:
+                raise core.Refused(view)
+            return view
+        ok, view = self.view(data, tags, self.fresh if self.mine(item) else None)
+        if not ok:
+            raise core.Refused(view)
+        return view
+
+    def view(self, data, tags, fresh=None):
+        """(True, scrubbed bytes) or (False, why not)."""
         text = scrub.text_of(data)
         if text is None:
-            raise core.Refused("not a text file, so it cannot be scrubbed")
+            return False, "not a text file, so it cannot be scrubbed"
         try:
-            return self.vault.scrub(text, self.tags(item, to), self.fresh if self.mine(item) else None).encode()
+            return True, self.vault.scrub(text, tags, fresh).encode()
         except scrub.Unscrubbable:
-            raise core.Refused("this file holds identifiers in an encoded form, so it cannot be scrubbed") from None
+            return False, "this file holds identifiers in an encoded form, so it cannot be scrubbed"
 
     def tags(self, item, node=None):
         """Whose identifiers to replace in an item going to `node`. A private file: its own scopes the
@@ -481,8 +501,9 @@ class Door:
                     new += 1                                   # not learned: its name may hold an identifier
                     continue
                 tag = hmac.new(bytes.fromhex(self.vault.v["key"]), f.encode(), "sha256").hexdigest()[:8]
-                named.append((f"{shown}/#{tag}" if hidden else   # a model sees nothing of it: not even names
-                              f"{shown}{f[len(root):] if raw else self.vault.scrub_name(f[len(root):], [s])}", tag, f))
+                name = f[len(root):] if raw else self.names[f, s] if (f, s) in self.names else \
+                    self.vault.scrub_name(f[len(root):], [s])  # made at the start, when it was learned
+                named.append((f"{shown}/#{tag}" if hidden else f"{shown}{name}", tag, f))   # hidden: not even names
                 self.learned.add(f"{node}:{f}")
             twice = {n for n, c in collections.Counter(n for n, _, _ in named).items() if c > 1}
             for name, tag, f in named:                         # two names scrubbed alike: each by its own tag,
