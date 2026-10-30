@@ -9,6 +9,8 @@ import csv
 import hashlib
 import hmac
 import io
+import base64
+import email.header
 import html
 import json
 import quopri
@@ -121,6 +123,19 @@ def decoded(text):
         t = urllib.parse.unquote(t)
     if re.search(r"=[0-9A-F]{2}|=\r?\n", t):
         t = quopri.decodestring(t.encode("utf-8", "replace")).decode("utf-8", "replace")
+    t = re.sub(r"=\?[^?\s]+\?[BbQq]\?[^?\s]*\?=", lambda m: "".join(                # =?UTF-8?B?...?=
+        p.decode(c or "utf-8", "replace") if isinstance(p, bytes) else p for p, c in email.header.decode_header(m.group(0))), t)
+    t = re.sub(r"(?:\\'[0-9a-fA-F]{2})+", lambda m: bytes.fromhex(m.group(0).replace("\\'", "")).decode("cp1252", "replace"), t)
+    t = re.sub(r"\\u(-?\d{1,5})\??", lambda m: chr(int(m.group(1)) % 65536), t)      # RTF \u233?
+    t = re.sub(r"(?:\\x[0-9a-fA-F]{2})+", lambda m: bytes.fromhex(m.group(0).replace("\\x", "")).decode("utf-8", "replace"), t)
+
+    def b64(m):                                                # short base64 that is text
+        try:
+            s = base64.b64decode(m.group(0) + "=" * (-len(m.group(0)) % 4), validate=True).decode("utf-8")
+        except ValueError:
+            return m.group(0)
+        return s if s.isprintable() and re.search(r"[^\W\d_]{2}", s) else m.group(0)
+    t = re.sub(r"(?<![\w+/])[A-Za-z0-9+/]{8,}={0,2}(?![\w+/=])", b64, t)
     return norm(t)
 
 
@@ -141,11 +156,26 @@ class Vault:
         self.path.write_text(json.dumps(self.v))
         self._re, self.dirty = {}, False
 
+    def bind(self, ids):
+        """Each scope name with what it is (its directories). A name that now means other data starts
+        an empty table, and its old placeholders no longer turn back into anything."""
+        of = self.v.setdefault("of", {})
+        for s, i in ids.items():
+            if of.get(s) != i:
+                self.v["by"].pop(s, None)
+                for t in [t for t, x in self.v["scope"].items() if x == s]:
+                    del self.v["scope"][t], self.v["real"][t]
+                self.v["files"], of[s] = {}, i
+                self.dirty = True
+        if self.dirty:
+            self.save()
+
     def _t(self, scope):
         return self.v["by"].setdefault(scope, {"ids": {}, "parts": {}, "digits": {}})
 
     def _new(self, real, kind, scope):
-        mac = hmac.new(bytes.fromhex(self.v["key"]), f"{scope}|{kind}|{real}".encode(), "sha256").hexdigest()
+        mac = hmac.new(bytes.fromhex(self.v["key"]), f"{self.v.get('of', {}).get(scope, scope)}|{kind}|{real}".encode(),
+                       "sha256").hexdigest()
         token = next(t for n in range(10, 65) for t in [f"[{kind}_{mac[:n]}]"]   # fixed length: a clash (2^-40) would
                      if self.v["real"].get(t, real) == real and self.v["scope"].get(t, scope) == scope)  # show, so none
         self.v["real"][token], self.v["scope"][token] = real, scope

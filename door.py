@@ -134,6 +134,7 @@ class Door:
         if self.raw & set(self.scopes.values()):               # that sees them raw may have typed there
             self._record("@" + self.ws, self.raw & set(self.scopes.values()))
         self.vault = scrub.Vault(self.state / "vault.json")
+        self.vault.bind({s: self._id(s) for s in set(self.scopes.values())})
         self.ledger_file = self.state / "ledger.json"
         if not self.ledger_file.exists():
             self.reset()

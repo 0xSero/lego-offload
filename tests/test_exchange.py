@@ -584,6 +584,33 @@ def test_fifteenth_hunt_stays_fixed():
             j.join()
 
 
+def test_sixteenth_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/staff.csv").write_text("name\nJosé Núñez\nMei Ng\n")
+        (t / "hr/review.rtf").write_text("{\\rtf1 Review for Jos\\'e9 N\\'fa\\'f1ez: exceeds.}\n")
+        (t / "hr/msg.eml").write_text("From: =?UTF-8?B?Sm9zw6kgTsO6w7Fleg==?=\nTo: TWVpIE5n\n")
+        (t / "hr/app.log").write_text("login user=b'Jos\\xc3\\xa9 N\\xc3\\xba\\xc3\\xb1ez'\n")
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2").mkdir()
+        for f in ("review.rtf", "msg.eml", "app.log"):
+            assert "encoded" in refusal(cloud, "read", path=str(t / f"hr/{f}")), f
+        seen = cloud.read(str(t / "hr/people.csv"))["text"]                  # session under policy A
+        (t / "hr2").mkdir()
+        (t / "hr2/x.csv").write_text("name\nOrrin Vex\n")
+        other = {**p, "scopes": {d.replace(str(t / "hr"), str(t / "hr2")): s for d, s in p["scopes"].items()},
+                 "workspace": str(t / "ws3")}
+        (t / "ws3").mkdir()
+        b = door.Door(other, t / "state", "pop")                               # policy B: its "hr" is hr2
+        b.prepare(lambda scope: lambda text: [])
+        back = b.vault.unscrub(seen, {"hr"})
+        assert not leaked(back), back                                          # A's placeholders mean nothing here
+        for j in pop.jobs + cloud.jobs + b.jobs:
+            j.join()
+
+
 def tmp_out():
     return tempfile.mkdtemp() + "/out.txt"
 
@@ -592,6 +619,6 @@ if __name__ == "__main__":
     for f in (test_levels, test_forward_cloud_in_front, test_reverse_local_in_front, test_found_leaks_stay_fixed,
               test_second_hunt_stays_fixed, test_third_hunt_stays_fixed, test_fourth_hunt_stays_fixed,
               test_fifth_hunt_stays_fixed, test_sixth_hunt_stays_fixed, test_seventh_hunt_stays_fixed,
-              test_eighth_hunt_stays_fixed, test_ninth_hunt_stays_fixed, test_tenth_hunt_stays_fixed, test_eleventh_hunt_stays_fixed, test_twelfth_hunt_stays_fixed, test_thirteenth_hunt_stays_fixed, test_fifteenth_hunt_stays_fixed):
+              test_eighth_hunt_stays_fixed, test_ninth_hunt_stays_fixed, test_tenth_hunt_stays_fixed, test_eleventh_hunt_stays_fixed, test_twelfth_hunt_stays_fixed, test_thirteenth_hunt_stays_fixed, test_fifteenth_hunt_stays_fixed, test_sixteenth_hunt_stays_fixed):
         f()
         print("ok  ", f.__name__)
