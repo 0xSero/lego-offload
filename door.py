@@ -313,6 +313,8 @@ class Door:
         for r in refs:
             it = self.item(r)
             node, _, path = it.ref.partition(":")
+            if node == self.host and inside(path, self.ws) and not os.path.exists(path):   # its own files only
+                raise core.Refused(f"no file {r} in your workspace. read \".\" lists what you can name.")
             found = [] if it.ref in self.refs or core.SEALED in it.scopes else transport.files(self.p["nodes"][node], path)
             out += [self.item(f"{node}:{f}", internal=True) for f in found] if found and found != [path] else [it]
         return out

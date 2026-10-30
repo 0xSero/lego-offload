@@ -179,6 +179,7 @@ def test_third_hunt_stays_fixed():
         rev.read(str(t / "hr/people.csv"))
         assert "hr" in rev.item("pub.md").scopes                             # still carries what pop read
         assert "[PERSON_" in rev.vault.scrub("zorbinaQuellwaterSalary and ZorbinaQuellwater", {"hr"})
+        assert "no file" in refusal(rev, "offload", task="x", inputs=["missing.md"], node="cloud")
         for j in d.jobs:
             j.join()
 
