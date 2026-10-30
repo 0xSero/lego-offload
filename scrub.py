@@ -387,8 +387,8 @@ class Vault:
                                             lambda m: tok("NAME", m.group(0)), seg))
         text = out(text, lambda seg: re.sub(r"(\0?)((?<![\w'])[\w'-]*[A-Z][\w'-]*)", lambda m: m.group(2) if m.group(1)
                                             and m.group(2).lower() in STARTERS else tok("NAME", m.group(2)), seg))
-        return out(text, lambda seg: re.sub(r"[^\W\d_]+", lambda m: m.group(0) if word(m.group(0)) and not (
-            m.group(0).lower() in FIRST)   # zorbina, mei, 王伟; frank, grace (any case)
+        return out(text, lambda seg: re.sub(r"[^\W\d_]+", lambda m: m.group(0) if (word(m.group(0)) or m.group(0).lower()
+                                            in TECH) and m.group(0).lower() not in FIRST   # zorbina, mei, 王伟; frank, grace
                                             else tok("NAME", m.group(0)), seg).replace("\0", ""))
 
     def scrub_name(self, name, scopes, fresh=None):
@@ -446,6 +446,15 @@ except OSError:
 WORDS |= set("paid has does doesn isn wasn didn don won can't email emails json csv tsv md txt py js ts pdf url api hr "
              "cc todo html http https www com org net io dataset vs etc eg ie ok id ids faq ceo cto cfo vp hq usd eur "
              "gbp kb mb gb ssh cli gpu cpu llm".split())   # what a short web2 lacks
+
+TECH = set("""offload offloads offloaded offloading workspace workspaces env envs avg dir dirs var vars config configs repo
+repos eval evals plaintext filename filenames handoff stdout stderr stdin regex regexes jsonl yaml toml enum enums int ints
+str dict dicts tuple tuples args kwargs params username usernames timestamp timestamps endpoint endpoints backend frontend
+metadata codebase async localhost subfolder subfolders subdirectory subdirectories readme byte bytes numeric unparseable
+parseable mcp sk pk rk utf ascii uuid ssn ssns pii http https auth init dev prod staging cron npm pip git diff diffs bool
+booleans boolean webhook webhooks lookup lookups untrusted unredacted redacted redaction pseudonymised pseudonymized
+placeholder placeholders canary canaries refactor refactored rerun reruns runtime lego classify newline newlines
+hyperlink""".split())   # lowercase technical words, for caller text only (own); FIRST still wins
 
 
 STARTERS = set("""a an the this that these those it its i we you he she they my our your their there here what
