@@ -198,6 +198,8 @@ class Door:
                 raise core.Refused(f"{self.scopes[d]} is hidden from some model, but no local model sees it raw to find its names")
             for path in transport.files(self.p["nodes"][node], root):
                 self.learn(f"{node}:{path}", transport.read(self.p["nodes"][node], path, 600), self.scopes[d], f)
+        for s in scrubbed:                                     # matchers built now, from what was learned: a
+            self.vault._pattern(s)                             # first call's time would show how much it holds
 
     def learn(self, ref, data, scope, f):
         """A private file's identifiers, its path's included (a name can sit in a file name only). Only
