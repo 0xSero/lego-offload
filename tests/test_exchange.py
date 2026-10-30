@@ -760,6 +760,66 @@ def test_twentieth_hunt_stays_fixed():
             j.join()
 
 
+def test_twentyfirst_hunt_stays_fixed():
+    import scrub
+    v = scrub.Vault(tempfile.mkdtemp() + "/v.json")
+    out = v.own(scrub.norm('Reviewer "Dr. Best" signs; cc (Mr. Read). **Dr. Best**; (J. Read) [Prof. Good]'), {}, {"hr"})
+    assert not re.search(r"\b(Read|Best|Good)\b", out), out                   # a title in brackets or quotes
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        os.symlink(t / "hr", t / "keys/mirror")
+        (t / "fin").mkdir()
+        simple = {"private": {"hr": str(t / "hr"), "keys": str(t / "keys"), "fin": str(t / "fin")},
+                  "workspace": str(t / "ws3"), "deadline": 0.3, "job_timeout": 1, "models": {
+                      "pop": {"url": "http://x/v1", "model": "local", "sees": "everything", "dir": str(t / "pop")},
+                      "mid": {"url": "http://x/v1", "model": "mid", "dir": str(t / "mid"),
+                              "sees": {"hr": "nothing", "keys": "everything", "fin": "everything"}}}}
+        (t / "ws3").mkdir()
+        mid = door.Door(door.expand(simple, t / "state3"), t / "state3", "mid")
+        mid.prepare(lambda scope: lambda text: [])
+        hr = str(t / "hr")
+        def blind(f):                                                           # no look inside hr, of any kind
+            return lambda q, *a, **k: (1 / 0) if str(q).startswith(hr) else f(q, *a, **k)
+        canon, real = door.canon, os.path.realpath
+        door.canon, os.path.realpath = blind(canon), blind(real)
+        def ask(world):
+            if world == "link":
+                os.symlink(t / "fin", t / "hr/sub")
+            elif world == "dir":
+                (t / "hr/sub").mkdir()
+            try:
+                return [json.dumps(mid.rpc({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+                    "name": "read", "arguments": {"path": str(t / "keys/mirror" / q)}}})) for q in ("sub/x", "sub" + "/a" * 60)]
+            finally:
+                os.unlink(t / "hr/sub") if world == "link" else os.rmdir(t / "hr/sub") if world == "dir" else None
+        try:
+            assert ask("link") == ask("dir") == ask("none")                     # hr's links and names: not shown
+        finally:
+            door.canon, os.path.realpath = canon, real
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2/sub").mkdir(parents=True)
+        (t / "ws2/sub/f").write_text("x")
+        os.mkfifo(t / "keys/deploy.fifo")
+        walk, rows = transport.files, []
+        for target in ("prod.env", "deploy.fifo"):
+            def swap(node, root, target=target):                                # the agent swaps a link in mid-walk
+                found = walk(node, root)
+                if root.endswith("/sub"):
+                    os.unlink(t / "ws2/sub/f")
+                    os.symlink(t / "keys" / target, t / "ws2/sub/f")
+                return found
+            transport.files = swap
+            try:
+                rows.append(json.loads(refusal(cloud, "offload", task="x", inputs=["sub"])).get("row"))
+            finally:
+                transport.files = walk
+                os.unlink(t / "ws2/sub/f")
+                (t / "ws2/sub/f").write_text("x")
+        assert rows[0] == rows[1], rows                                         # a FIFO in keys looks like a file
+        for j in mid.jobs + cloud.jobs:
+            j.join()
+
+
 def test_own_precision():
     """Caller text: everyday and technical words stay as written; names, in any of the forms the hunts used, do not."""
     import scrub

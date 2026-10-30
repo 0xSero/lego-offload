@@ -405,7 +405,7 @@ class Vault:
                                             lambda m: tok("ID", m.group(0)), seg))
         start = r"(?:^|(?<=[.!?:;]\s)|(?<=[.!?:;]\s\s)|(?<=\n)|(?<=[-*#>]\s))"   # where a capital means nothing
         def titled(before):                                    # J. Read, Det. Good, Dña. Best, prof. Read
-            t = (re.findall(r"(\S+)\s{1,2}$", before) or [""])[0]
+            t = re.sub(r"^[^\w]+", "", (re.findall(r"(\S+)\s{1,2}$", before) or [""])[0])   # (Dr. Best), **Mr. Read**
             w = t.rstrip(".")
             return w.lower() in TITLES or t.endswith(".") and 0 < len(w) <= 5 and w.isalpha() and w[0].isupper() and (
                 len(w) == 1 or not w.isupper())                # but not an acronym: AWS. The end.

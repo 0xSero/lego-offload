@@ -246,10 +246,10 @@ class Door:
                 raise core.Refused(f"name files in {sorted(named)} by the names listed (read \".\" lists them)")
         if node == self.host:                                  # the agent can plant links in its workspace:
             if named:                                          # keys/mirror -> hr: every scope a hop lands in
-                root = next(d.partition(":")[2] for d in fs if fs[d] in named and inside(fold(path), d.partition(":")[2]))
-                hops = path[len(root):].strip("/").split("/")
-                named = named | frozenset().union(*(core.label(f"{node}:{canon(os.path.join(path[:len(root)], *hops[:k]))}",
-                                                               self.public, self.scopes) for k in range(1, len(hops) + 1))) - {core.SEALED}
+                path, named, hidden = self.below(path, named)
+                if hidden:                                     # into a scope it sees nothing of: not a look further
+                    self.deferred.add(f"{node}:{path}")
+                    return core.Item(f"{node}:{path}", named, node)
             path = canon(path)                                 # label where the bytes really are, and pin them
             lab = core.label(f"{node}:{path}", self.public, self.scopes)
             lab = named if named and (lab - named or len(named) > 1) else lab
@@ -301,6 +301,28 @@ class Door:
             else:
                 cur = canon(nxt)                               # case and firmlinks only: nxt is no link
         return cur
+
+    def below(self, path, named):
+        """Links under a private directory the caller sees, followed one hop at a time with readlink only,
+        stopping at a scope it sees nothing of: (path, every scope a hop landed in, stopped?)."""
+        fold = lambda p: unicodedata.normalize("NFC", p).casefold()  # noqa: E731
+        for _ in range(40):
+            root = next(r for d in self.scopes if (r := d.partition(":")[2]) and d.startswith(self.host + ":")
+                        and inside(fold(path), fold(r)))
+            rel = [p for p in path[len(root):].split("/") if p]
+            k = next((k for k in range(len(rel)) if os.path.islink(os.path.join(root, *rel[:k + 1]))), None)
+            if k is None:
+                return root + path[len(root):], named, False
+            hop = os.path.join(root, *rel[:k + 1])
+            path = self.upto(os.path.normpath(os.path.join(os.path.dirname(hop), os.readlink(hop), *rel[k + 1:])))
+            lab = core.label(f"{self.host}:{fold(path)}", {fold(p) for p in self.public},
+                             {fold(d): s for d, s in self.scopes.items()})
+            if core.SEALED in lab or inside(fold(path), fold(self.ws)):   # out of every scope: the link's own
+                return path, named, False
+            named = named | lab
+            if not core.may_hold(self.me, core.scrubbed(lab)):
+                return path, named, True
+        raise core.Refused("too many links")
 
     def give(self, item, node):
         """The exchange rule: (item as `node` gets it, scrubbed?) or None."""
@@ -478,7 +500,14 @@ class Door:
             if node == self.host and inside(path, self.ws) and not os.path.exists(path):   # its own files only
                 raise core.Refused(f"no file {r} in your workspace. read \".\" lists what you can name.")
             found = [] if it.ref in self.refs or core.SEALED in it.scopes else transport.files(self.p["nodes"][node], path)
-            got = [self.item(f"{node}:{f}", internal=True) for f in found if inside(f, path)] if found and found != [path] else [it]
+            got = [it]
+            if found and found != [path]:                      # one swapped for a link meanwhile: dropped, whatever
+                got = []                                       # it points at, and before a look at it
+                for f in (f for f in found if inside(f, path)):
+                    try:
+                        got.append(self.item(f"{node}:{f}", internal=True))
+                    except core.Refused:
+                        pass
             out += [i for i in got if inside(i.ref.partition(":")[2], path)]   # swapped for a link meanwhile: dropped
         return out
 
