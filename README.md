@@ -178,14 +178,14 @@ The reply row is chosen from labels, the ledger and the node's queue alone, befo
 | File | Lines | What |
 |-|-|-|
 | `core.py` | 201 | The seven bricks, the cache salt and the scrubbed twin of a scope. Pure: no I/O, no clock, no network |
-| `door.py` | 748 | The simple policy, the exchange rule, and the `read` and `offload` tools, served as MCP over HTTP on localhost. Asks `core.py` at every step |
+| `door.py` | 749 | The simple policy, the exchange rule, and the `read` and `offload` tools, served as MCP over HTTP on localhost. Asks `core.py` at every step |
 | `scrub.py` | 509 | The vault: identifiers learned from the private files (patterns with checksums, table columns, a local model), stable placeholders, and back again per scope |
-| `transport.py` | 277 | Carries out moves and runs over ssh, or calls a cloud model with the user's login. Constrained JSON decoding and the scope's cache salt |
+| `transport.py` | 310 | Carries out moves and runs over ssh, or calls a cloud model with the user's login. Constrained JSON decoding and the scope's cache salt |
 | `route.py` | 177 | Localhost proxy to the agent's model. Strips the room's placeholder, injects the real credential, captures every exchange decompressed |
 | `room.py` + `room/room.sb` | 40 + 110 | The sandbox. Deny by default: the workspace, a throwaway HOME, the agent's install directory, and the two ports |
 | `agents.py` | 128 | One adapter per agent: config pointing the model at the route and tools at the door |
 | `lego.py` + `lego` | 143 + 3 | The CLI. Picks the agent's own model, fills the vault, one session at a time per policy and per workspace |
-| **implementation** | **2,300** | app, tests and verification excluded |
+| **implementation** | **2,334** | app, tests and verification excluded |
 | `app.py` + `app.html` | 157 + 141 | `lego app`: a local page to run tasks and watch the door |
 | `verify/` | | `Lego.lean` (the proof), `twin.py` (Lean vs the door), `sim.bend` + `sim_ref.py` (the simulation). See [`verify/README.md`](verify/README.md) |
 | `tests/` | | `test_core.py`, `test_queue.py`, `test_exchange.py`, `test_room.py`, `test_agents.py`, `e2e.py`, `twoway.py`, `contention.py`, `traces.py`, `report.py` |
@@ -223,7 +223,7 @@ All numbers come from the last `./run`. [`results/REPORT.md`](results/REPORT.md)
 
 7/7 tasks done, 0 of 76 canaries in any byte the cloud got. In reverse mode the cloud saw only placeholders (`[PERSON_3f9a]`, `[EMAIL_51c0]`) and omp got the real names back. Most of the forward bytes are Claude Code's own system prompt and tools.
 
-**Leak hunts.** Twenty-two rounds of adversarial agents (a forward attacker, a reverse attacker, and a skeptic that reproduces each claim offline; round 17 added an attacker on the optimisation diff) attacked the door between real runs. They confirmed 13, 4, 11, 6, 6, 11, 5, 7, 6, 7, 4, 6, 3, 0, 7, 2, 5, 5, 4, 8, 4 and 8 leaks. All but four are fixed and have a case in `tests/test_exchange.py` (`test_*_hunt_stays_fixed`); the four are the limits listed below. Examples: a model's output on raw data was handed back scrubbed (whitespace in a schema-valid JSON reply carried the names); an unscrubbed reply was labelled only `hr~`; file names held emails and SSNs; `read` told an existing private path from a missing one.
+**Leak hunts.** Twenty-three rounds of adversarial agents (a forward attacker, a reverse attacker, and a skeptic that reproduces each claim offline; round 17 added an attacker on the optimisation diff) attacked the door between real runs. They confirmed 13, 4, 11, 6, 6, 11, 5, 7, 6, 7, 4, 6, 3, 0, 7, 2, 5, 5, 4, 8, 4, 8 and 5 leaks. All but four are fixed and have a case in `tests/test_exchange.py` (`test_*_hunt_stays_fixed`); the four are the limits listed below. Examples: a model's output on raw data was handed back scrubbed (whitespace in a schema-valid JSON reply carried the names); an unscrubbed reply was labelled only `hr~`; file names held emails and SSNs; `read` told an existing private path from a missing one.
 
 **Real models (one way, earlier):** 33/33 cases pass: 4 agents × 8 cases, plus the scripted attacker.
 
@@ -254,7 +254,8 @@ All numbers come from the last `./run`. [`results/REPORT.md`](results/REPORT.md)
 - learn anything from naming paths in a scope it sees nothing of: such a path is labelled from its name alone (links are followed one hop at a time and only up to a private directory, never inside it, however the path is spelt or linked), and the door looks for its files only inside the job, after the reply's time is fixed;
 - follow links out of a scope inside a hidden job: a hidden input with a link anywhere between its scope's directory and the file fails its job (still charged), and links inside a staged scope are skipped by the node's runner, so a job pays for and reads only its own scope;
 - name a file by inode (`/.vol/<dev>/<inode>`) or descriptor (`/dev/fd/N`): refused before any look;
-- reach anything through a link: lego follows a link only while it walks a name from `/` to the first private directory, by `readlink`, one hop at a time. From there on (inside every private directory, and for the file it then opens) nothing is followed: every path is opened one component at a time from a folder held open, so a link in a private directory, or one the agent swaps into its workspace a moment after naming a file, gets the same refusal whatever it points at; a folder that holds private directories is never walked;
+- reach anything through a link: lego follows a link only while it walks a name from `/` to the first private directory, by `readlink`, one hop at a time. From there on (inside every private directory, and for the file it then opens) nothing is followed: every path is opened one component at a time from a folder held open, so a link in a private directory, or one the agent swaps into its workspace a moment after naming a file, gets the same refusal whatever it points at; a folder that holds private directories is never walked. The same holds on every machine: a file on another node is read by a small program that opens it the same way, and a hidden input on a third machine is never packed from this one's disk;
+- time a cloud job by what it was given: the cloud call runs in its own process, stopped at the job's bound, so the door does no work that grows with hidden data;
 - send names in `returns`: an enum member or int bound that the text-only rules would replace is refused for a model that sees the data scrubbed;
 - get a shaped answer outside the outcomes it paid for: the hidden model's reply is parsed inside the job, before its bound, and anything odd (too long, too deep) is `UNKNOWN`;
 - learn a hidden scope's folder layout from how long a listing takes: a scope the caller sees nothing of is counted once, before the agent starts, and a private directory inside another one or inside a public path is refused when the policy loads;

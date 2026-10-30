@@ -10,6 +10,7 @@ import secrets
 import shlex
 import stat
 import subprocess
+import sys
 import time
 
 RUNNER = r'''
@@ -52,10 +53,28 @@ def _sh(node, cmd, data=None, timeout=60):
     return r.stdout
 
 
+CAT = r'''
+import os, stat, sys
+fd, parts = os.open("/", os.O_RDONLY), [x for x in sys.argv[1].split("/") if x]
+for i, x in enumerate(parts):                  # one component at a time, no link followed
+    n = os.open(x, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | (0 if i == len(parts) - 1 else os.O_DIRECTORY), dir_fd=fd)
+    os.close(fd)
+    fd = n
+if not stat.S_ISREG(os.fstat(fd).st_mode):
+    sys.exit("not a regular file")
+for b in iter(lambda: os.read(fd, 1 << 20), b""):
+    sys.stdout.buffer.write(b)
+'''
+
+
 def read(node, path, timeout=60):
+    """A regular file's bytes, with no link followed anywhere on its path, on any node."""
     if node.get("ssh"):
-        return _sh(node, "cat " + shlex.quote(path), timeout=timeout)
-    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)              # here: no process, and never waits on a FIFO
+        return _sh(node, "python3 -c " + shlex.quote(CAT) + " " + shlex.quote(path), timeout=timeout)
+    try:
+        fd = nofollow(path)                                     # here: no process, never waits on a FIFO
+    except OSError as e:
+        raise RuntimeError(f"cat failed on local: {e.strerror}") from None
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise RuntimeError("cat failed on local: not a regular file")
@@ -93,6 +112,12 @@ def nofollow(path, flags=os.O_RDONLY):
 def _regular(top):
     """Regular files at or under `top`: links neither followed nor listed (not even on the way to top, or
     swapped in during the walk: each folder is opened from its parent's descriptor), unreadable folders skipped."""
+    return walk(top, lambda e: e.is_file(follow_symlinks=False))
+
+
+def walk(top, keep, skip=lambda name: False):
+    """Entries under `top` that are not folders and that keep(entry) accepts (a link is such an entry, never
+    entered), never entering a folder whose name skip() accepts; each folder opened from its parent's descriptor."""
     try:
         fd = nofollow(top)
     except OSError:
@@ -110,8 +135,8 @@ def _regular(top):
                 for e in it:
                     try:
                         if e.is_dir(follow_symlinks=False):
-                            subs.append(e.name)
-                        elif e.is_file(follow_symlinks=False):
+                            subs += [] if skip(e.name) else [e.name]
+                        elif keep(e):
                             out.append(os.path.join(p, e.name))
                     except OSError:
                         pass
@@ -196,8 +221,16 @@ def run_job(node, files, task, schema, out_path, keep, timeout, salt=None):
     written to out_path on the node; it comes back only when keep is False. The job is over a second
     before `timeout`, killed if need be, so the node is idle when the bound the door booked comes."""
     timeout = max(0.1, timeout - 1.0)
-    if node["model"].get("api") == "anthropic":
-        return run_anthropic(node, files, task, schema, out_path, keep, timeout)
+    if node["model"].get("api") == "anthropic":                # in a child killed at the bound: the door itself
+        job = {"node": node, "files": files, "task": task, "schema": schema, "out_path": out_path, "keep": keep,
+               "timeout": timeout}                             # does no work that grows with the files
+        r = subprocess.run([sys.executable, "-c", "import json, sys; sys.path.insert(0, sys.argv[1]); import transport; "
+                            "print(json.dumps(transport.run_anthropic(**json.load(sys.stdin))))",
+                            os.path.dirname(os.path.abspath(__file__))], input=json.dumps(job).encode(),
+                           capture_output=True, timeout=timeout)
+        if r.returncode:
+            raise RuntimeError("cloud job failed")
+        return json.loads(r.stdout)
     job = {"files": files, "task": task, "schema": schema_json(schema) if schema else None,
            "model": node["model"], "out": out_path, "keep": keep, "timeout": timeout, "salt": salt}
     t0 = time.time()

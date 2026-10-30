@@ -886,6 +886,45 @@ def test_twentysecond_hunt_stays_fixed():
             j.join()
 
 
+def test_twentythird_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        for d in ("box/hr", "box/keys", "archive-of-human-resources"):
+            (t / d).mkdir(parents=True)
+        (t / "box/hr/people.csv").write_text(CSV)
+        (t / "box/keys/prod.env").write_text("x\n")
+        os.symlink(t / "box/hr", t / "box/keys/mirror")                       # the user's link, on another node
+        node = lambda trust, n: {"trust": trust, "out": str(t / n / "out"), "stage": str(t / n / "stage")}  # noqa: E731
+        q = {**p, "scopes": {f"box:{t}/box/hr": "hr", f"box:{t}/box/keys": "keys", **p["scopes"]},
+             "nodes": {**p["nodes"], "box": node(["hr", "hr~", "keys", "keys~"], "box"),
+                       "mid": {**node(["keys", "keys~"], "mid"), "model": {"url": "http://x/v1", "model": "mid",
+                                                                         "base_url": "http://x/v1"}}}}
+        mid = door.Door({**q, "workspace": str(t / "ws3")}, t / "state3", "mid")
+        (t / "ws3").mkdir()
+        mid.prepare(lambda scope: lambda text: [])
+        got = json.dumps(mid.rpc({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": "read", "arguments": {"path": f"box:{t}/box/keys/mirror/people.csv"}}}))
+        assert not leaked(got), got                                             # no link followed on any node
+        assert "another machine" in refusal(mid, "offload", task="x", inputs=[f"box:{t}/box/hr"], returns={"bool": True},
+                                            node="pop")                         # never packed from this disk
+        (t / "hr/orrin.vexley@corp.example.md").write_text("note\n")
+        two = {**p, "scopes": {f"here:{t}/archive-of-human-resources": "hr", **p["scopes"]}}
+        pop = door.Door(two, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        cloud = door.Door({**two, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2").mkdir()
+        os.symlink(t / "keys", t / "ws2/z")
+        scan = os.scandir
+        os.scandir = lambda d: scan(d) if isinstance(d, int) else 1 / 0          # folders entered by descriptor only
+        try:
+            listing = cloud.read(".")["text"]
+        finally:
+            os.scandir = scan
+        assert "orrin" not in listing and "prod.env" not in listing and "  z\n" in listing, listing
+        for j in mid.jobs + pop.jobs + cloud.jobs:
+            j.join()
+
+
 def test_own_precision():
     """Caller text: everyday and technical words stay as written; names, in any of the forms the hunts used, do not."""
     import scrub

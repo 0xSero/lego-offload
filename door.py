@@ -250,7 +250,9 @@ class Door:
         """A private file's identifiers, its path's included (a name can sit in a file name only). Only
         here, before the agent starts: learning later would take time that depends on the file."""
         if not self.vault.known(ref, data):
-            rel = ref.partition(":")[2][len(next((d.partition(":")[2] for d, s in self.scopes.items() if s == scope), "")):]
+            node, _, path = ref.partition(":")
+            rel = path[len(max((d.partition(":")[2] for d, s in self.scopes.items() if s == scope and d.startswith(node + ":")
+                                and inside(path, d.partition(":")[2])), key=len, default="")):]
             self.vault.learn(ref, data, [scope], f, also=rel.replace("/", "\n"))
 
     # ---------- the exchange ----------
@@ -435,11 +437,8 @@ class Door:
         return "\n".join(lines) or "  (none)"
 
     def listing(self):
-        files = []
-        for root, dirs, names in os.walk(self.ws):             # a link is a name, wherever it points
-            links = [d for d in dirs if os.path.islink(os.path.join(root, d))]
-            dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in links)
-            files += [os.path.relpath(os.path.join(root, n), self.ws) for n in sorted(names + links)]
+        files = sorted(os.path.relpath(f, self.ws) for f in transport.walk(self.ws, lambda e: True,
+                                                                          lambda name: name.startswith(".")))
         return (f"Your workspace {self.ws} (relative paths mean files here):\n" +
                 "\n".join("  " + f for f in files[:200]) + "\nPrivate directories:\n" + self.catalog())
 
@@ -557,6 +556,8 @@ class Door:
         reader = core.Node(n, self.nodes[n].trust & self.seen) if srcs is views else self.nodes[n]   # who sees the
         given = [(g, s or s2 or (self.mine(i) and not everything and bool(self.tags(i, reader))))   # what the caller wrote:
                  for (i, s), (g, s2) in zip(srcs, (self.give(i, self.nodes[n]) for i, _ in srcs))]  # like its task
+        if any(i.ref in self.deferred and i.node not in (self.host, n) for i, _ in given):
+            raise core.Refused(f"data hidden from you on another machine goes only to a model on that machine, not {n}")
         if any(s and i.ref in self.deferred for i, s in given):
             raise core.Refused("data hidden from you goes only to a model that sees it raw")
         scrub_task = given[-1][1] or not everything            # names it saw in this tool's text, too
