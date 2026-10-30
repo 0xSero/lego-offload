@@ -278,11 +278,6 @@ class Vault:
         self.v["files"][name] = hashlib.sha256(raw.encode()).hexdigest()
         self.save()
 
-    def copy_of(self, text):
-        """The learned private files the text is, byte for byte (only a whole file matches)."""
-        h = hashlib.sha256(norm(text).encode()).hexdigest()
-        return {n for n, x in self.v["files"].items() if x == h}
-
     def known(self, name, data):
         text = norm(text_of(data) or "")
         return self.v["files"].get(name) == hashlib.sha256(text.encode()).hexdigest()
@@ -300,8 +295,9 @@ class Vault:
                 for q in {p, p.replace("'", "")}:              # O'Brien, OBrien
                     for f in {q, q.upper(), q.title(), q.lower()}:   # its own files: "frank" too
                         forms.setdefault(f, tok)
-                if len(p) >= 4 and p.lower() not in COMMON:
-                    folded.setdefault(fold(p), tok)
+                for q in {p.replace("'", ""), *p.split("'")[1:]}:   # o'brien as obrien, and brien (O Brien)
+                    if len(q) >= 4 and q.lower() not in COMMON:
+                        folded.setdefault(fold(q), tok)
             b, e = r"(?<![A-Za-z0-9])", r"(s?)(?![A-Za-z0-9])"     # '_' and '.' separate words; plurals too
             digits = t["digits"]
             short = {fold(p): tok for p, tok in t["parts"].items() if len(p) < 4 and p.lower() not in COMMON}
@@ -375,10 +371,10 @@ class Vault:
                 return w[0] + short[w[1:]] if w[1:] in short else short[w[:-1]] + w[-1]
             return None
 
-        def run(m):                                            # MeiNg: short names as whole humps
-            return glue(fold(m.group(0))) or parts(m.group(0)) or "".join(short.get(fold(w)) or parts(w) or w
+        def run(m):                                            # MeiNg: short names as whole humps; O'brien whole
+            return glue(fold(m.group(0)).replace("'", "")) or parts(m.group(0)) or "".join(short.get(fold(w)) or parts(w) or w
                                                 for w in re.split(r"(?<=[a-z])(?=[A-Z])", m.group(0)))
-        return self._out(text, lambda seg: re.sub(r"[^\W\d_]+", run, seg), keep)
+        return self._out(text, lambda seg: re.sub(r"[^\W\d_]+(?:'[^\W\d_]+)*", run, seg), keep)
 
     def own(self, text, fresh, scopes=()):
         """Text the caller wrote, which a lower model may have asked it to relay: replaced by rules that

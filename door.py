@@ -77,6 +77,43 @@ def canon(p):
         os.close(fd)
 
 
+def getpath(fd):
+    """An open file's path as the disk spells it (macOS), or None."""
+    try:
+        return fcntl.fcntl(fd, fcntl.F_GETPATH, bytes(1024)).rstrip(b"\0").decode() if hasattr(fcntl, "F_GETPATH") else None
+    except OSError:
+        return None
+
+
+def spelled(dirfd, name):
+    """The on-disk spelling of `name` in an open folder, not following it if it is a link (None if it
+    cannot be opened)."""
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dirfd)
+    except OSError:
+        return None
+    try:
+        return getpath(fd)
+    finally:
+        os.close(fd)
+
+
+def bounded(f, timeout):
+    """f() in a thread, waited on until the timeout and no longer (a late f is left to finish unread)."""
+    box = {}
+    t = threading.Thread(target=lambda: box.update(v=f()), daemon=True)
+    t.start()
+    t.join(timeout)
+    if "v" not in box:
+        raise TimeoutError("staging reached the job's bound")
+    return box["v"]
+
+
+def literals(schema):
+    """The values a `returns` schema spells out: enum members and int bounds, in tuples too."""
+    return [*schema.get("enum", []), *schema.get("int", []), *(x for t in schema.get("tuple", []) for x in literals(t))]
+
+
 def same_disk(a, b):
     """Whether two paths' nearest existing folders are on one file system (the room can df its own)."""
     dev = lambda p: os.stat(next(q for q in [p, *Path(p).parents] if os.path.exists(q))).st_dev  # noqa: E731
@@ -244,22 +281,19 @@ class Door:
                 return core.Item(f"{node}:{path}", named, node)
             if f"{node}:{fold(path)}" not in fs:
                 raise core.Refused(f"name files in {sorted(named)} by the names listed (read \".\" lists them)")
-        if node == self.host:                                  # the agent can plant links in its workspace:
-            if named:                                          # keys/mirror -> hr: every scope a hop lands in
-                path, named, hidden = self.below(path, named)
-                if hidden:                                     # into a scope it sees nothing of: not a look further
-                    self.deferred.add(f"{node}:{path}")
-                    return core.Item(f"{node}:{path}", named, node)
-            path = canon(path)                                 # label where the bytes really are, and pin them
-            lab = core.label(f"{node}:{path}", self.public, self.scopes)
-            lab = named if named and (lab - named or len(named) > 1) else lab
-            if not internal and core.SEALED not in lab and not inside(path, self.ws) and \
-                    not core.may_hold(self.me, core.scrubbed(lab)):   # a link into a scope it sees nothing of:
-                self.deferred.add(f"{node}:{path}")            # like naming it, decided before any look at it
-                return core.Item(f"{node}:{path}", lab, node)
-            if os.path.exists(path):
-                st = os.stat(path)
-                if inside(path, self.ws) and st.st_nlink > 1 and not os.path.isdir(path):
+        if node == self.host:                                  # upto() followed every link it met by readlink; from
+            try:                                               # here on, none is: one open, no link on the way
+                fd = transport.nofollow(path)
+            except FileNotFoundError:
+                fd = None
+            except OSError:                                    # a link in a private folder, or one swapped in after
+                raise core.Refused(f"{asked} goes through a link lego does not follow; name the file itself") from None
+            if fd is not None:
+                try:
+                    st, path = os.fstat(fd), getpath(fd) or path   # its spelling on disk, from the open file
+                finally:
+                    os.close(fd)
+                if inside(path, self.ws) and st.st_nlink > 1 and not stat.S_ISDIR(st.st_mode):
                     raise core.Refused(f"{asked} is hardlinked")
                 if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):
                     raise core.Refused(f"{asked} is not a regular file")
@@ -268,10 +302,8 @@ class Door:
         scopes = self.refs[ref] if ref in self.refs else core.label(ref, self.public, self.scopes)
         if node == self.host and inside(path, self.ws):
             scopes = frozenset(self.context)                   # the agent's own files hold what it was given
-        elif named and core.SEALED in scopes:
+        elif named and core.SEALED in scopes:                 # a scope's own spelling on disk: still the scope
             scopes = named
-        elif named and len(named) > 1:                         # reached through a link from another scope
-            scopes = scopes | named                                     # named inside a scope, linked out of it: still the scope
         roots = [d for d, s in self.scopes.items() if s in scopes and d.startswith(node + ":")]
         if not internal and ref not in self.refs and roots and not any(d == ref for d in roots) and \
                 not core.may_hold(self.me, scopes) and core.may_hold(self.me, core.scrubbed(scopes)):
@@ -280,49 +312,37 @@ class Door:
 
     def upto(self, path):
         """The path with links resolved only until it reaches a private directory; the rest as written,
-        so naming a path in a scope never looks at what lies inside it."""
+        so naming a path in a scope never looks at what lies inside it. A link is followed only here, by
+        readlink, one hop at a time; each step looks up one name in a folder held open, never through a link."""
         cur, rest, hops = "/", [p for p in path.split("/") if p], 0
-        while rest:                                            # one component, one link hop at a time
+        while rest:
             if any(inside(cur, r) for r in self.roots):
                 if {".", ".."} & set(rest):
                     raise core.Refused("name files inside a private directory by plain paths, without . or ..")
                 return os.path.join(cur, *rest)
             p = rest.pop(0)
-            nxt = os.path.join(cur, p)
-            if nxt.casefold() in ("/.vol", "/dev/fd", "/dev/stdin", "/dev/stdout", "/dev/stderr"):
+            if os.path.join(cur, p).casefold() in ("/.vol", "/dev/fd", "/dev/stdin", "/dev/stdout", "/dev/stderr"):
                 raise core.Refused("name files by their paths, not by inode or descriptor")
-            if p == "..":
-                cur = os.path.dirname(cur)
-            elif os.path.islink(nxt):
-                if hops == 40:
-                    raise core.Refused("too many links")
-                hops, tgt = hops + 1, os.readlink(nxt)
-                cur, rest = ("/" if tgt.startswith("/") else cur), [q for q in tgt.split("/") if q] + rest
-            else:
-                cur = canon(nxt)                               # case and firmlinks only: nxt is no link
+            if p in (".", ".."):
+                cur = cur if p == "." else os.path.dirname(cur)
+                continue
+            try:
+                fd = transport.nofollow(cur)
+            except OSError:                                    # missing, or changed meanwhile: as written
+                return os.path.join(cur, p, *rest)
+            try:
+                if stat.S_ISLNK(os.stat(p, dir_fd=fd, follow_symlinks=False).st_mode):
+                    if hops == 40:
+                        raise core.Refused("too many links")
+                    hops, tgt = hops + 1, os.readlink(p, dir_fd=fd)
+                    cur, rest = ("/" if tgt.startswith("/") else cur), [q for q in tgt.split("/") if q] + rest
+                else:
+                    cur = spelled(fd, p) or os.path.join(cur, p)   # case and firmlinks only: p is no link
+            except FileNotFoundError:
+                return os.path.join(cur, p, *rest)
+            finally:
+                os.close(fd)
         return cur
-
-    def below(self, path, named):
-        """Links under a private directory the caller sees, followed one hop at a time with readlink only,
-        stopping at a scope it sees nothing of: (path, every scope a hop landed in, stopped?)."""
-        fold = lambda p: unicodedata.normalize("NFC", p).casefold()  # noqa: E731
-        for _ in range(40):
-            root = next(r for d in self.scopes if (r := d.partition(":")[2]) and d.startswith(self.host + ":")
-                        and inside(fold(path), fold(r)))
-            rel = [p for p in path[len(root):].split("/") if p]
-            k = next((k for k in range(len(rel)) if os.path.islink(os.path.join(root, *rel[:k + 1]))), None)
-            if k is None:
-                return root + path[len(root):], named, False
-            hop = os.path.join(root, *rel[:k + 1])
-            path = self.upto(os.path.normpath(os.path.join(os.path.dirname(hop), os.readlink(hop), *rel[k + 1:])))
-            lab = core.label(f"{self.host}:{fold(path)}", {fold(p) for p in self.public},
-                             {fold(d): s for d, s in self.scopes.items()})
-            if core.SEALED in lab or inside(fold(path), fold(self.ws)):   # out of every scope: the link's own
-                return path, named, False
-            named = named | lab
-            if not core.may_hold(self.me, core.scrubbed(lab)):
-                return path, named, True
-        raise core.Refused("too many links")
 
     def give(self, item, node):
         """The exchange rule: (item as `node` gets it, scrubbed?) or None."""
@@ -339,7 +359,7 @@ class Door:
         bytes already read."""
         to, (node, _, path) = node or self.me, item.ref.partition(":")
         if data is None and node == self.host:
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            fd = transport.nofollow(path)                       # no link anywhere on the way
             try:
                 st = os.fstat(fd)
                 if not stat.S_ISREG(st.st_mode):
@@ -359,9 +379,7 @@ class Door:
         if text is None:
             raise core.Refused("not a text file, so it cannot be scrubbed")
         try:
-            copy = self.mine(item) and any(core.label(f, self.public, self.scopes) & self.tags(item, to)   # a private
-                                           for f in self.vault.copy_of(text))   # file it sees raw, copied whole: as one
-            return self.vault.scrub(text, self.tags(item, to), self.fresh if self.mine(item) and not copy else None).encode()
+            return self.vault.scrub(text, self.tags(item, to), self.fresh if self.mine(item) else None).encode()
         except scrub.Unscrubbable:
             raise core.Refused("this file holds identifiers in an encoded form, so it cannot be scrubbed") from None
 
@@ -436,9 +454,10 @@ class Door:
         got = self.give(it, self.me)
         if not got:
             raise core.Refused(f"you may not see {sorted(it.scopes)}; ask about it with offload and `returns`")
-        if it.node == self.host and os.path.isdir(path):     # only once the level allows it
+        kind = self.kind(path) if it.node == self.host else stat.S_IFREG
+        if kind == stat.S_IFDIR:                               # only once the level allows it
             return {"row": "listing", "text": self.listing()}
-        if it.node == self.host and not os.path.isfile(path):
+        if kind != stat.S_IFREG:
             raise core.Refused(f"no file {ref}" + (" in your workspace; private files go by the full paths listed under "
                                "Private directories" if not ref.startswith("/") and ref.partition(":")[0] not in self.nodes
                                else "") + ". read \".\" lists what you can name.")
@@ -448,6 +467,19 @@ class Door:
         cut = [n for n in self.cut_off() if n not in before]   # from the scopes and the policy alone
         return {"row": "scrubbed" if got[1] else "full", "text": text,
                 **({"note": f"lego: {', '.join(cut)} can now take no more tasks from you."} if cut else {})}
+
+    def kind(self, path):
+        """A host path's file type, with no link followed on the way (None: missing)."""
+        try:
+            fd = transport.nofollow(path)
+        except FileNotFoundError:
+            return None
+        except OSError:
+            raise core.Refused("the path goes through a link lego does not follow; name the file itself") from None
+        try:
+            return stat.S_IFMT(os.fstat(fd).st_mode)
+        finally:
+            os.close(fd)
 
     def cut_off(self):
         """The other models that may not be given what the caller's context holds."""
@@ -497,7 +529,9 @@ class Door:
             if it.ref in self.deferred:
                 out.append(it)
                 continue
-            if node == self.host and inside(path, self.ws) and not os.path.exists(path):   # its own files only
+            if any(inside(r, path) and r != path for r in self.roots):   # a folder holding a private one: named
+                raise core.Refused(f"name the private directories in {r} one by one")        # one by one, unwalked
+            if node == self.host and inside(path, self.ws) and self.kind(path) is None:   # its own files only
                 raise core.Refused(f"no file {r} in your workspace. read \".\" lists what you can name.")
             found = [] if it.ref in self.refs or core.SEALED in it.scopes else transport.files(self.p["nodes"][node], path)
             got = [it]
@@ -527,6 +561,11 @@ class Door:
             raise core.Refused("data hidden from you goes only to a model that sees it raw")
         scrub_task = given[-1][1] or not everything            # names it saw in this tool's text, too
         task = self.vault.scrub(task, self.tags(ins[-1], reader), self.fresh) if scrub_task else task
+        if scrub_task and returns and (tags := self.tags(ins[-1], reader)):   # its literals reach the model as written
+            for x in literals(returns):
+                if self.vault.own(scrub.norm(str(x)), {}, tags) != scrub.norm(str(x)):
+                    raise core.Refused(f"returns: {x!r} would reach {n} as written, but it sees this data scrubbed. "
+                                       "Use plain words, placeholders you were given, and int bounds under 1000")
         typed = set() if scrub_task else self.raw & set(self.scopes.values())   # a raw task's output may hold them
         snap = {i.ref: self.bytes_of(i, False) for i, _ in given[:-1] if self.mine(i)}   # the caller's files, read
         with self.locks[n]:                                    # now: the job never touches the workspace
@@ -584,8 +623,8 @@ class Door:
                 name = i.ref.rsplit("/", 1)[-1]
                 name = name if everything and not s else self.vault.scrub_name(
                     name, self.tags(i, reader), self.fresh if self.mine(i) else None)
-                files.append(i.ref.partition(":")[2] if i.node == n and not s else
-                             transport.put(node, node["stage"], name, self.bytes_of(i, s, left(), reader, snap.get(i.ref)), left()))
+                files.append(i.ref.partition(":")[2] if i.node == n and not s else bounded(lambda: transport.put(
+                    node, node["stage"], name, self.bytes_of(i, s, left(), reader, snap.get(i.ref)), left()), left()))
             core.run([core.move(g, self.nodes[n]) for g, _ in given], self.nodes[n], out.ref)
             r = transport.run_job(node, files, task, returns, out.ref.partition(":")[2], keep=row == "receipt",
                                   timeout=left(), salt=core.salt(self.salt_key, out.scopes))

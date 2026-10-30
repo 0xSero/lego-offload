@@ -67,33 +67,69 @@ def read(node, path, timeout=60):
 def files(node, root):
     """The regular files under a directory on a node, sorted."""
     if not node.get("ssh"):                                     # here: what `find -type f` lists, no process
-        return sorted(f.decode(errors="replace") for f in _regular(os.fsencode(root)))
+        return sorted(_regular(root))
     out = _sh(node, f"find {shlex.quote(root)} -type f -print0 2>/dev/null; true", timeout=120)   # names may hold newlines
     return sorted(f for f in out.decode(errors="replace").split("\0") if f)
 
 
-def _regular(top):
-    """Regular files at or under `top`: links neither followed nor listed, unreadable folders skipped."""
+def nofollow(path, flags=os.O_RDONLY):
+    """A descriptor for `path`, opened one component at a time from / without following any link, so
+    a link anywhere on the way (one swapped in a moment ago, too) raises OSError instead of being followed."""
+    sep = b"/" if isinstance(path, bytes) else "/"
+    parts = [p for p in path.split(sep) if p]
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
     try:
-        mode = os.lstat(top).st_mode
+        for i, p in enumerate(parts):
+            nfd = os.open(p, (flags if i == len(parts) - 1 else os.O_RDONLY | os.O_DIRECTORY) | os.O_NOFOLLOW |
+                          os.O_NONBLOCK, dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _regular(top):
+    """Regular files at or under `top`: links neither followed nor listed (not even on the way to top, or
+    swapped in during the walk: each folder is opened from its parent's descriptor), unreadable folders skipped."""
+    try:
+        fd = nofollow(top)
     except OSError:
         return []
+    mode = os.fstat(fd).st_mode
     if not stat.S_ISDIR(mode):
+        os.close(fd)
         return [top] if stat.S_ISREG(mode) else []
-    out, todo = [], [top]
-    while todo:                                                # a loop, not recursion: any depth
+    out, stack = [], []
+
+    def enter(p, d):
+        subs = []
         try:
-            entries = list(os.scandir(todo.pop()))
+            with os.scandir(d) as it:
+                for e in it:
+                    try:
+                        if e.is_dir(follow_symlinks=False):
+                            subs.append(e.name)
+                        elif e.is_file(follow_symlinks=False):
+                            out.append(os.path.join(p, e.name))
+                    except OSError:
+                        pass
         except OSError:
+            pass
+        stack.append((p, d, subs))
+    enter(top, fd)
+    while stack:                                               # a loop, not recursion: any depth
+        p, d, subs = stack[-1]
+        if not subs:
+            os.close(d)
+            stack.pop()
             continue
-        for e in entries:
-            try:
-                if e.is_dir(follow_symlinks=False):
-                    todo.append(e.path)
-                elif e.is_file(follow_symlinks=False):
-                    out.append(e.path)
-            except OSError:
-                pass
+        n = subs.pop()
+        try:
+            enter(os.path.join(p, n), os.open(n, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=d))
+        except OSError:
+            pass
     return out
 
 

@@ -820,6 +820,72 @@ def test_twentyfirst_hunt_stays_fixed():
             j.join()
 
 
+def test_twentysecond_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/staff.csv").write_text("name\nSean O'Brien\nDina D'Angelo\n")
+        (t / "hr/notes.md").write_text("O'brien, o'Brien, O Brien, sobrien and d'angelo met.\n")
+        (t / "hr/review.md").write_text("Review: Zorbina Quellwater exceeded every target.\n")
+        (t / "fin").mkdir()
+        os.symlink(t / "hr", t / "keys/mirror")
+        os.symlink(t, t / "keys/up")                                           # a link to the folder holding hr
+        os.mkfifo(t / "keys/deploy.fifo")
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2").mkdir()
+        view = cloud.read(str(t / "hr/notes.md"))["text"]
+        assert not re.search(r"(?i)brien|angelo", view), view                  # apostrophe names, any spelling
+        up = cloud.upto
+        answers = set()
+        for target in ("keys/prod.env", "keys/nope.env", "keys/deploy.fifo", "keys/mirror/people.csv", "keys"):
+            (t / "ws2/x").write_text("plain")
+            def swap(path, target=target):                                      # swapped in just after naming
+                got = up(path)
+                os.unlink(t / "ws2/x")
+                os.symlink(t / target, t / "ws2/x")
+                return got
+            cloud.upto = swap
+            answers.add(refusal(cloud, "read", path="x"))
+            os.unlink(t / "ws2/x")
+        cloud.upto = up
+        assert len(answers) == 1, answers                                       # the same, wherever it points
+        try:
+            pop.offload("Who earns more?", [str(t / "hr/staff.csv")], returns={"enum": ["Zorbina Quellwater", "other"]},
+                        node="cloud")
+            raise AssertionError("a real name in returns crossed")
+        except core.Refused:
+            pass
+        def sent(guess):                                                        # the cloud's guesses, relayed
+            d = door.Door({**p, "workspace": str(t / f"ws_{guess}")}, t / "state", "pop")
+            Path(d.ws).mkdir()
+            (Path(d.ws) / "draft.md").write_text(f"Review: {guess} exceeded every target.\n")
+            GOT.clear()
+            d.offload("Polish", ["draft.md"], node="cloud")
+            for j in d.jobs:
+                j.join()
+            return shape(re.sub(r"\[([A-Z]+)_[0-9a-f]+\]|[0-9a-f]{16}-", r"[\1_0]", GOT[-1][1]))
+        assert sent("Zorbina Quellwater") == sent("Orrin Vexley")             # the same whichever is right
+        simple = {"private": {"hr": str(t / "hr"), "keys": str(t / "keys"), "fin": str(t / "fin")},
+                  "workspace": str(t / "ws3"), "deadline": 0.3, "job_timeout": 1, "models": {
+                      "pop": {"url": "http://x/v1", "model": "local", "sees": "everything", "dir": str(t / "pop")},
+                      "mid": {"url": "http://x/v1", "model": "mid", "dir": str(t / "mid"),
+                              "sees": {"hr": "nothing", "keys": "everything", "fin": "scrubbed"}}}}
+        (t / "ws3").mkdir()
+        mid = door.Door(door.expand(simple, t / "state3"), t / "state3", "mid")
+        mid.prepare(lambda scope: lambda text: [])
+        walk = transport.files
+        transport.files = lambda node, root: (1 / 0) if root.startswith(str(t / "hr")) or root == str(t) else walk(node, root)
+        try:
+            for q in ("keys/up", "keys/up/hr/people.csv", "keys/mirror/x", "keys/mirror/people.csv"):
+                assert "link lego does not follow" in refusal(mid, "offload", task="x", inputs=[str(t / q)],
+                                                              returns={"bool": True}), q   # never walked or labelled
+        finally:
+            transport.files = walk
+        for j in pop.jobs + cloud.jobs + mid.jobs:
+            j.join()
+
+
 def test_own_precision():
     """Caller text: everyday and technical words stay as written; names, in any of the forms the hunts used, do not."""
     import scrub
