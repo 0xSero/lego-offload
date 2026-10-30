@@ -109,6 +109,23 @@ def put(node, dst_dir, name, data, timeout=60):
     return dst
 
 
+def unlinked(node, root, path, timeout=60):
+    """Raises unless no part of `path` below `root` is a link: a job on a scope reads only that scope."""
+    rel = [p for p in os.path.relpath(path, root).split("/") if p not in ("", ".")]
+    if ".." in rel:
+        raise RuntimeError("outside its scope")
+    steps = [os.path.join(root, *rel[:k + 1]) for k in range(len(rel))]
+    if node.get("ssh"):
+        _sh(node, "for p in " + " ".join(map(shlex.quote, steps)) + '; do test -L "$p" && exit 1; done; exit 0', timeout=timeout)
+        return
+    for p in steps:
+        try:
+            if stat.S_ISLNK(os.lstat(p).st_mode):
+                raise RuntimeError("a link inside a scope")
+        except FileNotFoundError:
+            return
+
+
 def put_tree(node, dst_dir, src, timeout=60):
     """Copy a file or directory from this host into a new folder on a node, in one pipe: the door does
     the same work however many files it holds. Returns its path on the node."""

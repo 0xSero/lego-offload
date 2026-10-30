@@ -279,8 +279,9 @@ class Vault:
         self.save()
 
     def copy_of(self, text):
-        """Whether the text is a learned private file, byte for byte (only a whole file matches)."""
-        return hashlib.sha256(norm(text).encode()).hexdigest() in set(self.v["files"].values())
+        """The learned private files the text is, byte for byte (only a whole file matches)."""
+        h = hashlib.sha256(norm(text).encode()).hexdigest()
+        return {n for n, x in self.v["files"].items() if x == h}
 
     def known(self, name, data):
         text = norm(text_of(data) or "")
@@ -350,7 +351,10 @@ class Vault:
             return text
 
         def parts(w):                                          # zorbinaQuellwater2, quillonbrimstoke, Jose for José, zOrBiNa
-            return inner.sub(lambda h: folded[h.group(0)], fold(w)) if inner and inner.search(fold(w)) else None
+            if not (inner and inner.search(fold(w))):
+                return None
+            return outside(inner.sub(lambda h: folded[h.group(0)], fold(w)), lambda seg: re.sub(   # zhangwei: wei too
+                r"[^\W\d_]+", lambda r: short.get(r.group(0)) or r.group(0), seg))
 
         def run(m):                                            # MeiNg: short names as whole humps
             return parts(m.group(0)) or "".join(short.get(fold(w)) or parts(w) or w
@@ -447,14 +451,12 @@ WORDS |= set("paid has does doesn isn wasn didn don won can't email emails json 
              "cc todo html http https www com org net io dataset vs etc eg ie ok id ids faq ceo cto cfo vp hq usd eur "
              "gbp kb mb gb ssh cli gpu cpu llm".split())   # what a short web2 lacks
 
-TECH = set("""offload offloads offloaded offloading workspace workspaces env envs avg dir dirs var vars config configs repo
-repos eval evals plaintext filename filenames handoff stdout stderr stdin regex regexes jsonl yaml toml enum enums int ints
-str dict dicts tuple tuples args kwargs params username usernames timestamp timestamps endpoint endpoints backend frontend
-metadata codebase async localhost subfolder subfolders subdirectory subdirectories readme byte bytes numeric unparseable
-parseable mcp utf ascii uuid ssn ssns pii http https auth init dev prod staging cron npm pip git diff diffs bool
-booleans boolean webhook webhooks lookup lookups untrusted unredacted redacted redaction pseudonymised pseudonymized
-placeholder placeholders canary canaries refactor refactored rerun reruns runtime lego classify newline newlines
-hyperlink""".split())   # lowercase technical words, for caller text only (own); FIRST still wins
+TECH = set("""offload offloads offloaded offloading workspace workspaces configs plaintext filename filenames handoff regexes
+username usernames timestamp timestamps endpoint endpoints backend frontend metadata codebase localhost subfolder
+subfolders subdirectory subdirectories numeric unparseable parseable staging booleans boolean webhook webhooks lookups
+untrusted unredacted redacted redaction pseudonymised pseudonymized placeholder placeholders canaries refactor
+refactored runtime classify newline newlines hyperlink""".split())   # long lowercase technical words, for caller text only (own); FIRST still
+                                 # wins. Short ones (repo, auth, diff, env) are surnames somewhere
 
 
 STARTERS = set("""a an the this that these those it its i we you he she they my our your their there here what

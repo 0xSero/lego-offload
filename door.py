@@ -140,6 +140,7 @@ class Door:
         if not self.ledger_file.exists():
             self.reset()
         self.refs, self.alias, self.inodes = {}, {}, {}         # result ref -> scopes; shown name -> ref; ref -> inode
+        self.found = {}                                        # scope dir -> its files, listed before the agent starts
         self.learned = set()                                    # files the catalog found in the vault
         self.deferred = set()                                   # hidden inputs, expanded only inside their job
         self.fresh = {}                                         # the caller's own words -> placeholders, and back
@@ -196,8 +197,11 @@ class Door:
             f = find(self.scopes[d]) if find else None
             if strict and not f:
                 raise core.Refused(f"{self.scopes[d]} is hidden from some model, but no local model sees it raw to find its names")
-            for path in transport.files(self.p["nodes"][node], root):
+            for path in self.found.setdefault(d, transport.files(self.p["nodes"][node], root)):
                 self.learn(f"{node}:{path}", transport.read(self.p["nodes"][node], path, 600), self.scopes[d], f)
+        for d in self.scopes:                                  # a listing never walks a scope at request time:
+            node, _, root = d.partition(":")                   # its time would show the hidden folders
+            self.found.setdefault(d, transport.files(self.p["nodes"][node], root))
         for s in scrubbed:                                     # matchers built now, from what was learned: a
             self.vault._pattern(s)                             # first call's time would show how much it holds
 
@@ -319,7 +323,8 @@ class Door:
         if text is None:
             raise core.Refused("not a text file, so it cannot be scrubbed")
         try:
-            copy = self.mine(item) and self.vault.copy_of(text)  # a private file copied whole: scrubbed as one
+            copy = self.mine(item) and any(core.label(f, self.public, self.scopes) & self.tags(item, to)   # a private
+                                           for f in self.vault.copy_of(text))   # file it sees raw, copied whole: as one
             return self.vault.scrub(text, self.tags(item, to), self.fresh if self.mine(item) and not copy else None).encode()
         except scrub.Unscrubbable:
             raise core.Refused("this file holds identifiers in an encoded form, so it cannot be scrubbed") from None
@@ -345,7 +350,8 @@ class Door:
         lines = []
         for d, s in self.scopes.items():
             node, _, root = d.partition(":")
-            lvl, found = self.level(s), transport.files(self.p["nodes"][node], root)
+            lvl = self.level(s)
+            found = self.found[d] if lvl == "nothing" and d in self.found else transport.files(self.p["nodes"][node], root)
             shown = root if node == self.host else d
             hidden = any(self.level(s, self.nodes[n]) == "nothing" for n, v in self.p["nodes"].items() if runnable(v))
             lines.append(f"  {shown}  [{s}]  you see: {lvl}" + {
@@ -526,6 +532,9 @@ class Door:
                 given = secrets.SystemRandom().sample(given, len(given))
             for i, s in given:
                 if i.ref in self.deferred:                     # hidden: whole, as one pipe, walked on the node
+                    root = next(r for d in self.scopes if (r := d.partition(":")[2]) and d.startswith(i.node + ":")
+                                and inside(i.ref.partition(":")[2], r))
+                    transport.unlinked(self.p["nodes"][i.node], root, i.ref.partition(":")[2], left())  # keys/mirror -> hr
                     files.append(i.ref.partition(":")[2] if i.node == n else
                                  transport.put_tree(node, node["stage"], i.ref.partition(":")[2], left()))
                     continue

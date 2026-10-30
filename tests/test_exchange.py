@@ -611,19 +611,57 @@ def test_sixteenth_hunt_stays_fixed():
             j.join()
 
 
+def test_seventeenth_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/staff.csv").write_text("name\nZhang Wei\nMei Zhang\n")
+        (t / "hr/glued.md").write_text("ZhangWei, zhangwei and MeiZhang met.\n")
+        os.symlink(t / "hr", t / "keys/mirror")                               # the user's own link, keys -> hr
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2").mkdir()
+        cloud.prepare(lambda scope: lambda text: [])
+        view = cloud.read(str(t / "hr/glued.md"))["text"]
+        assert not re.search(r"(?i)zhang|wei|mei", view), view                  # a short name glued to a long one
+        GOT.clear()
+        cloud.offload("Is Zorbina in this file?", [str(t / "keys/mirror/people.csv")], returns={"bool": True}, node="pop")
+        for j in cloud.jobs:
+            j.join()
+        assert not any(leaked(g) for _, g in GOT), GOT                          # a job on keys reads only keys
+        walk = transport.files
+        transport.files = lambda node, root: walk(node, root) if "keys" not in root else 1 / 0   # keys: never walked
+        try:
+            assert "1 files" in cloud.read(".")["text"]                          # keys' count, from before the agent
+        finally:
+            transport.files = walk
+        def sent(guess):                                                        # pop relays a guess at a keys file
+            d = door.Door({**p, "workspace": str(t / f"ws_{len(guess)}_{guess[-2]}")}, t / "state", "pop")
+            Path(d.ws).mkdir()
+            (Path(d.ws) / "g.txt").write_text(guess)
+            GOT.clear()
+            d.offload("Summarise", ["g.txt"], node="cloud")
+            for j in d.jobs:
+                j.join()
+            return shape(re.sub(r"\[([A-Z]+)_[0-9a-f]+\]|[0-9a-f]{16}-", r"[\1_0]", GOT[-1][1]))
+        assert sent((t / "keys/prod.env").read_text()) == sent("STRIPE_KEY=sk_live_Wrong9876543210987654321\n")
+        for j in pop.jobs + cloud.jobs:
+            j.join()
+
+
 def test_own_precision():
     """Caller text: everyday and technical words stay as written; names, in any of the forms the hunts used, do not."""
     import scrub
     v = scrub.Vault(tempfile.mkdtemp() + "/v.json")
     text = ("What is the average salary in the CSV? Offload the env file from the workspace and check the stdout. "
             "Mail Zorbina about quellwater, and tell Will, May and frank that Strand left. Grace Friday, January Jones "
-            "and Mary I. Baker agree; ask knapper and barrio and judge and lord and shadow, and sk and pk.")
+            "and Mary I. Baker agree; ask knapper and barrio and judge and lord and shadow, and sk and pk, aino repo and hanna auth.")
     out = v.own(scrub.norm(text), {}, {"hr"})
     words = set(re.findall(r"[\w']+", out))
-    for keep in ("the", "average", "salary", "env", "workspace", "stdout"):
+    for keep in ("the", "average", "salary", "file", "workspace"):
         assert keep in words, (keep, out)
     for name in ("Zorbina", "quellwater", "Will", "May", "frank", "Strand", "Grace", "Friday", "January", "Jones",
-                 "Mary", "Baker", "knapper", "barrio", "judge", "lord", "shadow", "sk", "pk"):
+                 "Mary", "Baker", "knapper", "barrio", "judge", "lord", "shadow", "sk", "pk", "aino", "repo", "auth"):
         assert name not in words, (name, out)
 
 
