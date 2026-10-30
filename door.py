@@ -561,8 +561,10 @@ class Door:
                     {s.rstrip("~") for s in self.context} - {core.SEALED} - {s for s in kinds if self.level(s) == "nothing"})) else "") + "\n"
                 "`offload` gives another model your task text and the `inputs` files, nothing else: write complete "
                 "instructions and list every file (a directory stands for all its files). If you could see all the "
-                "inputs, you get the full result. On inputs you may not see, pass `returns`, one small typed answer "
-                "paid from a per-scope bit allowance and sent after a fixed delay; without it you get a receipt "
+                "inputs, the model gets them at your level (or its own, if lower) and you get the full result, with "
+                "placeholders of data you see raw put back: tell it to copy placeholders as written. To use more than "
+                "you see, pass `returns`: one small typed answer paid from a per-scope bit allowance and sent after a "
+                "fixed delay; without it you get a receipt "
                 "(the result is saved for the user; its ref can be an input later).")
 
     def tools(self):
