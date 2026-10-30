@@ -178,14 +178,14 @@ The reply row is chosen from labels, the ledger and the node's queue alone, befo
 | File | Lines | What |
 |-|-|-|
 | `core.py` | 201 | The seven bricks, the cache salt and the scrubbed twin of a scope. Pure: no I/O, no clock, no network |
-| `door.py` | 667 | The simple policy, the exchange rule, and the `read` and `offload` tools, served as MCP over HTTP on localhost. Asks `core.py` at every step |
-| `scrub.py` | 506 | The vault: identifiers learned from the private files (patterns with checksums, table columns, a local model), stable placeholders, and back again per scope |
+| `door.py` | 680 | The simple policy, the exchange rule, and the `read` and `offload` tools, served as MCP over HTTP on localhost. Asks `core.py` at every step |
+| `scrub.py` | 513 | The vault: identifiers learned from the private files (patterns with checksums, table columns, a local model), stable placeholders, and back again per scope |
 | `transport.py` | 241 | Carries out moves and runs over ssh, or calls a cloud model with the user's login. Constrained JSON decoding and the scope's cache salt |
 | `route.py` | 177 | Localhost proxy to the agent's model. Strips the room's placeholder, injects the real credential, captures every exchange decompressed |
 | `room.py` + `room/room.sb` | 40 + 110 | The sandbox. Deny by default: the workspace, a throwaway HOME, the agent's install directory, and the two ports |
 | `agents.py` | 128 | One adapter per agent: config pointing the model at the route and tools at the door |
 | `lego.py` + `lego` | 143 + 3 | The CLI. Picks the agent's own model, fills the vault, one session at a time per policy and per workspace |
-| **implementation** | **2,216** | app, tests and verification excluded |
+| **implementation** | **2,236** | app, tests and verification excluded |
 | `app.py` + `app.html` | 157 + 141 | `lego app`: a local page to run tasks and watch the door |
 | `verify/` | | `Lego.lean` (the proof), `twin.py` (Lean vs the door), `sim.bend` + `sim_ref.py` (the simulation). See [`verify/README.md`](verify/README.md) |
 | `tests/` | | `test_core.py`, `test_queue.py`, `test_exchange.py`, `test_room.py`, `test_agents.py`, `e2e.py`, `twoway.py`, `contention.py`, `traces.py`, `report.py` |
@@ -223,7 +223,7 @@ All numbers come from the last `./run`. [`results/REPORT.md`](results/REPORT.md)
 
 7/7 tasks done, 0 of 76 canaries in any byte the cloud got. In reverse mode the cloud saw only placeholders (`[PERSON_3f9a]`, `[EMAIL_51c0]`) and omp got the real names back. Most of the forward bytes are Claude Code's own system prompt and tools.
 
-**Leak hunts.** Nineteen rounds of adversarial agents (a forward attacker, a reverse attacker, and a skeptic that reproduces each claim offline; round 17 added an attacker on the optimisation diff) attacked the door between real runs. They confirmed 13, 4, 11, 6, 6, 11, 5, 7, 6, 7, 4, 6, 3, 0, 7, 2, 5, 5 and 4 leaks. All but four are fixed and have a case in `tests/test_exchange.py` (`test_*_hunt_stays_fixed`); the four are the limits listed below. Examples: a model's output on raw data was handed back scrubbed (whitespace in a schema-valid JSON reply carried the names); an unscrubbed reply was labelled only `hr~`; file names held emails and SSNs; `read` told an existing private path from a missing one.
+**Leak hunts.** Twenty rounds of adversarial agents (a forward attacker, a reverse attacker, and a skeptic that reproduces each claim offline; round 17 added an attacker on the optimisation diff) attacked the door between real runs. They confirmed 13, 4, 11, 6, 6, 11, 5, 7, 6, 7, 4, 6, 3, 0, 7, 2, 5, 5, 4 and 8 leaks. All but four are fixed and have a case in `tests/test_exchange.py` (`test_*_hunt_stays_fixed`); the four are the limits listed below. Examples: a model's output on raw data was handed back scrubbed (whitespace in a schema-valid JSON reply carried the names); an unscrubbed reply was labelled only `hr~`; file names held emails and SSNs; `read` told an existing private path from a missing one.
 
 **Real models (one way, earlier):** 33/33 cases pass: 4 agents × 8 cases, plus the scripted attacker.
 
@@ -253,6 +253,9 @@ All numbers come from the last `./run`. [`results/REPORT.md`](results/REPORT.md)
 - read one scope through another's view: the vault keeps one table per scope, bound to the scope's directories (a policy that reuses the name for other data starts afresh, and the old placeholders turn back into nothing), so a scope's placeholders and what it replaces come from its own files alone (two scopes holding the same email give it two placeholders);
 - learn anything from naming paths in a scope it sees nothing of: such a path is labelled from its name alone (links are followed one hop at a time and only up to a private directory, never inside it, however the path is spelt or linked), and the door looks for its files only inside the job, after the reply's time is fixed;
 - follow links out of a scope inside a hidden job: a hidden input with a link anywhere between its scope's directory and the file fails its job (still charged), and links inside a staged scope are skipped by the node's runner, so a job pays for and reads only its own scope;
+- name a file by inode (`/.vol/<dev>/<inode>`) or descriptor (`/dev/fd/N`): refused before any look;
+- reach a hidden scope through a link in a scope it sees: a path that passes through a link into another scope carries both scopes' labels;
+- get a shaped answer outside the outcomes it paid for: the hidden model's reply is parsed inside the job, before its bound, and anything odd (too long, too deep) is `UNKNOWN`;
 - learn a hidden scope's folder layout from how long a listing takes: a scope the caller sees nothing of is counted once, before the agent starts, and a private directory inside another one or inside a public path is refused when the policy loads;
 - watch a hidden job through its workspace: the agent's own files are read before the reply, a FIFO or other special file is refused, and no job touches the workspace afterwards;
 - probe names: a caller that sees a scope scrubbed may name its files only by the placeholder names it was shown, and the level is checked before the file system is touched, so a guessed path gets the same refusal whether or not it exists. Files added after lego starts are counted, not named, until lego restarts and learns them;

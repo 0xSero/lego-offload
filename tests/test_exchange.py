@@ -709,6 +709,57 @@ def test_nineteenth_hunt_stays_fixed():
             j.join()
 
 
+def test_twentieth_hunt_stays_fixed():
+    import scrub
+    v = scrub.Vault(tempfile.mkdtemp() + "/v.json")
+    out = v.own(scrub.norm("Draft to Dña. Read and DDr. Best, MSc. Good."), {}, {"hr"})
+    assert not re.search(r"\b(Read|Best|Good)\b", out), out                   # any short abbreviation
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/staff.csv").write_text("name\nWei Li\nJin Kim\n")
+        (t / "hr/logins.md").write_text("adminliweiops wli jkim kimj\n")
+        (t / "hr/orrin.vex@corp.example.md").write_text("note\n")
+        (t / "outside").mkdir()
+        (t / "outside/salaries.csv").write_text("SECRETSAL 162000\n")
+        os.symlink(t / "outside/salaries.csv", t / "hr/salaries.csv")       # the user's links
+        os.symlink(t / "hr", t / "keys/mirror")
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2").mkdir()
+        view = cloud.read(str(t / "hr/logins.md"))["text"]
+        assert not re.search(r"(?i)li|wei|kim", view), view                    # known parts anywhere, initials
+        assert "orrin" not in cloud.read(".")["text"]                           # an email in a file name
+        dev = os.stat(t / "keys/prod.env").st_dev
+        probes = {refusal(cloud, "read", path=f"/.vol/{dev}/{n}") for n in (os.stat(t / "keys/prod.env").st_ino, 999999999)}
+        assert len(probes) == 1, probes                                         # inode paths: never resolved
+        real = transport.run_job
+        transport.run_job = lambda *a, **k: {"took": 0.0, "output": '{"answer": ' + "[" * 100000 + "]" * 100000 + "}"}
+        try:
+            r = cloud.offload("Is it live?", [str(t / "keys")], returns={"bool": True}, node="pop")
+            assert r.get("row") == "shaped" and r["answer"] == "UNKNOWN", r     # one of the outcomes paid for
+        finally:
+            transport.run_job = real
+        simple = {"private": {"hr": str(t / "hr"), "keys": str(t / "keys")}, "workspace": str(t / "ws3"), "deadline": 0.3,
+                  "job_timeout": 1, "models": {
+                      "pop": {"url": "http://x/v1", "model": "local", "sees": "everything", "dir": str(t / "pop")},
+                      "mid": {"url": "http://x/v1", "model": "mid", "sees": {"hr": "nothing", "keys": "everything"},
+                              "dir": str(t / "mid")}}}
+        (t / "ws3").mkdir()
+        mid = door.Door(door.expand(simple, t / "state3"), t / "state3", "mid")
+        mid.prepare(lambda scope: lambda text: [])
+        got = json.dumps(mid.rpc({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": "read", "arguments": {"path": str(t / "keys/mirror/salaries.csv")}}}))
+        assert "SECRETSAL" not in got, got                                      # through keys, into hr, out of it
+        try:
+            door.Door(door.expand({**simple, "private": {"hr": str(t / "hr"), "bak": str(t / "hr~")}}, t / "s4"), t / "s4", "pop")
+            raise AssertionError("a directory ending in ~ was accepted")
+        except core.Refused:
+            pass
+        for j in pop.jobs + cloud.jobs + mid.jobs:
+            j.join()
+
+
 def test_own_precision():
     """Caller text: everyday and technical words stay as written; names, in any of the forms the hunts used, do not."""
     import scrub

@@ -200,7 +200,7 @@ def answer(output):
     """Pull the typed answer out of a constrained JSON reply (anything odd -> None)."""
     try:
         return json.loads(output.strip().removeprefix("```json").removesuffix("```"))["answer"]
-    except (ValueError, TypeError, KeyError, AttributeError):
+    except Exception:                                           # RecursionError too: any odd reply
         return None
 
 

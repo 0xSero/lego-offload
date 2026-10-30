@@ -17,7 +17,6 @@ import fcntl
 import hmac
 import json
 import os
-import re
 import secrets
 import stat
 import threading
@@ -105,6 +104,8 @@ class Door:
         self.scopes = policy["scopes"]
         core.check_policy(self.public, self.scopes)
         for d in self.scopes:                                  # a listing of the outer one would show the inner
+            if d.endswith("~") or "," in d:                    # taint ids: dirs joined by "," and "~" for scrubbed
+                raise core.Refused(f"private directory {d} may not end in ~ or hold a comma")
             if any(d.startswith(o.rstrip("/") + "/") for o in [*self.public, *self.scopes] if o != d):
                 raise core.Refused(f"private directory {d} is inside a public path or another private directory")
         if not set(self.scopes.values()) | {core.SEALED} <= self.nodes[self.host].trust:
@@ -213,7 +214,7 @@ class Door:
         here, before the agent starts: learning later would take time that depends on the file."""
         if not self.vault.known(ref, data):
             rel = ref.partition(":")[2][len(next((d.partition(":")[2] for d, s in self.scopes.items() if s == scope), "")):]
-            self.vault.learn(ref, data, [scope], f, also=re.sub(r"[/_]+", " ", rel))
+            self.vault.learn(ref, data, [scope], f, also=rel.replace("/", "\n"))
 
     # ---------- the exchange ----------
     def item(self, ref, internal=False):
@@ -244,8 +245,14 @@ class Door:
             if f"{node}:{fold(path)}" not in fs:
                 raise core.Refused(f"name files in {sorted(named)} by the names listed (read \".\" lists them)")
         if node == self.host:                                  # the agent can plant links in its workspace:
+            if named:                                          # keys/mirror -> hr: every scope a hop lands in
+                root = next(d.partition(":")[2] for d in fs if fs[d] in named and inside(fold(path), d.partition(":")[2]))
+                hops = path[len(root):].strip("/").split("/")
+                named = named | frozenset().union(*(core.label(f"{node}:{canon(os.path.join(path[:len(root)], *hops[:k]))}",
+                                                               self.public, self.scopes) for k in range(1, len(hops) + 1))) - {core.SEALED}
             path = canon(path)                                 # label where the bytes really are, and pin them
             lab = core.label(f"{node}:{path}", self.public, self.scopes)
+            lab = named if named and (lab - named or len(named) > 1) else lab
             if not internal and core.SEALED not in lab and not inside(path, self.ws) and \
                     not core.may_hold(self.me, core.scrubbed(lab)):   # a link into a scope it sees nothing of:
                 self.deferred.add(f"{node}:{path}")            # like naming it, decided before any look at it
@@ -262,7 +269,9 @@ class Door:
         if node == self.host and inside(path, self.ws):
             scopes = frozenset(self.context)                   # the agent's own files hold what it was given
         elif named and core.SEALED in scopes:
-            scopes = named                                     # named inside a scope, linked out of it: still the scope
+            scopes = named
+        elif named and len(named) > 1:                         # reached through a link from another scope
+            scopes = scopes | named                                     # named inside a scope, linked out of it: still the scope
         roots = [d for d, s in self.scopes.items() if s in scopes and d.startswith(node + ":")]
         if not internal and ref not in self.refs and roots and not any(d == ref for d in roots) and \
                 not core.may_hold(self.me, scopes) and core.may_hold(self.me, core.scrubbed(scopes)):
@@ -280,6 +289,8 @@ class Door:
                 return os.path.join(cur, *rest)
             p = rest.pop(0)
             nxt = os.path.join(cur, p)
+            if nxt.casefold() in ("/.vol", "/dev/fd", "/dev/stdin", "/dev/stdout", "/dev/stderr"):
+                raise core.Refused("name files by their paths, not by inode or descriptor")
             if p == "..":
                 cur = os.path.dirname(cur)
             elif os.path.islink(nxt):
@@ -515,8 +526,7 @@ class Door:
         deadline = self.p["deadline"]
         job.join(max(0.0, t0 + deadline - time.time()))
         time.sleep(max(0.0, t0 + deadline - time.time()))       # the reply time never depends on the job
-        value = core.clock(core.shape(transport.answer(result.get("output")), returns),
-                           0 if not job.is_alive() else deadline + 1, deadline)
+        value = core.clock(result.get("value", core.UNKNOWN), 0 if not job.is_alive() else deadline + 1, deadline)
         self._note(op="answer", ref=out.ref, answer=value)
         return {"row": "shaped", "answer": value, "ref": out.ref, "allowance_left": ledger}
 
@@ -551,6 +561,9 @@ class Door:
             r = transport.run_job(node, files, task, returns, out.ref.partition(":")[2], keep=row == "receipt",
                                   timeout=left(), salt=core.salt(self.salt_key, out.scopes))
             self._note(op="done", ref=out.ref, took=round(r["took"], 2))
+            if row == "shaped":                                # here, before `end`: the reply never parses
+                o = r.get("output")
+                r["value"] = core.shape(transport.answer(o), returns) if isinstance(o, str) and len(o) <= 4096 else core.UNKNOWN
             return r
         except Exception as e:                                 # never echo private detail to the cloud
             self._note(op="error", ref=out.ref, error=str(e)[:300])

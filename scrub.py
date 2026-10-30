@@ -146,8 +146,8 @@ class Vault:
     def __init__(self, path):
         self.path = Path(path)
         self.v = json.loads(self.path.read_text()) if self.path.exists() else {}
-        if "by" not in self.v:                                  # an older, shared-table vault: relearn
-            self.v = {}
+        if self.v.get("version") != 2:                          # an older vault: relearn
+            self.v = {"version": 2}
         for k in ("real", "scope", "files", "by"):
             self.v.setdefault(k, {})
         self.v.setdefault("key", secrets.token_hex(16))
@@ -255,8 +255,8 @@ class Vault:
         `find(text)` (a local model trusted with the file) lists as people, addresses and other ids.
         `also`: more text to search the same way, such as the file's path."""
         raw = norm(text_of(data) or "")
-        also = re.sub(r"(?<=[a-z])(?=[A-Z])|[^\w]+|_+", " ", also)          # Varnella-Oxtrude, VarnellaOxtrude
-        text = also + "\n" + raw if also else raw
+        split = re.sub(r"(?<=[a-z])(?=[A-Z])|[^\w]+|_+", " ", also)         # Varnella-Oxtrude, VarnellaOxtrude
+        text = also + "\n" + split + "\n" + raw if also else raw          # and as written: a.b@corp.example.md
         self.find_in(text, scopes)
         ext = name.rsplit(".", 1)[-1].lower()
         if ext in ("csv", "tsv"):
@@ -355,25 +355,28 @@ class Vault:
 
         most = max(map(len, [*short, *folded]), default=0)
 
-        back = ({k[::-1]: v for k, v in short.items()}, {k[::-1]: v for k, v in folded.items()})
-
-        def chain(w, sh, fo):                                  # the longest run of known parts w starts with: two
+        def chain(w):                                          # the longest run of known parts w starts with: two
             best, end = {0: []}, 0                             # or more, or one long one (liwei..., zhangwei...)
             for i in range(len(w)):
                 for j in range(i + 2, min(len(w), i + most) + 1) if i in best else ():
-                    if j not in best and (w[i:j] in sh or w[i:j] in fo):
-                        best[j] = best[i] + [sh.get(w[i:j]) or fo[w[i:j]]]
-                        end = j if len(best[j]) > 1 or w[i:j] in fo else end
+                    if j not in best and (w[i:j] in short or w[i:j] in folded):
+                        best[j] = best[i] + [short.get(w[i:j]) or folded[w[i:j]]]
+                        end = j if len(best[j]) > 1 or w[i:j] in folded else end
             return best[end], end
 
-        def ends(w):                                           # liweiAdmin, adminNgMei: known parts at either end
-            head, a = chain(w, short, folded)
-            tail, b = chain(w[a:][::-1], *back)
-            mid = w[a:len(w) - b]
-            return "".join(head) + (parts(mid) or mid) + "".join(tail[::-1]) if a or b else None
+        def glue(w):                                           # adminliweiops, devzhangweiops: known parts anywhere
+            out, i, hit = [], 0, False
+            while i < len(w):
+                toks, n = chain(w[i:])
+                out, i, hit = (out + toks, i + n, True) if n else (out + [w[i]], i + 1, hit)
+            if hit:
+                return "".join(out)
+            if len(w) > 2 and (w[1:] in short or w[:-1] in short):   # wli, kimj: an initial and a short name
+                return w[0] + short[w[1:]] if w[1:] in short else short[w[:-1]] + w[-1]
+            return None
 
         def run(m):                                            # MeiNg: short names as whole humps
-            return ends(fold(m.group(0))) or parts(m.group(0)) or "".join(short.get(fold(w)) or parts(w) or w
+            return glue(fold(m.group(0))) or parts(m.group(0)) or "".join(short.get(fold(w)) or parts(w) or w
                                                 for w in re.split(r"(?<=[a-z])(?=[A-Z])", m.group(0)))
         return self._out(text, lambda seg: re.sub(r"[^\W\d_]+", run, seg), keep)
 
@@ -401,10 +404,13 @@ class Vault:
         text = out(text, lambda seg: re.sub(r"(?<![^\W_])(?=[^\W_]*\d)(?=[^\W_]*[^\W\d_])[^\W_]{3,}",   # e10234
                                             lambda m: tok("ID", m.group(0)), seg))
         start = r"(?:^|(?<=[.!?:;]\s)|(?<=[.!?:;]\s\s)|(?<=\n)|(?<=[-*#>]\s))"   # where a capital means nothing
-        honor = "".join(rf"(?<!\b{t}\s)(?<!\b{t}\s\s)" for t in (*(rf"[A-Z][a-z]{{{n}}}\." for n in range(5)), "Dear", *(
-            x + d for x in "Mr Ms Mrs Mx Dr Prof Sir Capt Col Gen Sgt Rev Hon St Lt Maj Cpt Fr".split()   # J. Read, Det. Good,
-            for x in (x, x.lower()) for d in ("", r"\."))))                                             # prof. Best
-        text = out(text, lambda seg: re.sub(start + honor + r"([A-Z][\w'-]*)", lambda m: "\0" + m.group(1), seg))
+        def titled(before):                                    # J. Read, Det. Good, Dña. Best, prof. Read
+            t = (re.findall(r"(\S+)\s{1,2}$", before) or [""])[0]
+            w = t.rstrip(".")
+            return w.lower() in TITLES or t.endswith(".") and 0 < len(w) <= 5 and w.isalpha() and w[0].isupper() and (
+                len(w) == 1 or not w.isupper())                # but not an acronym: AWS. The end.
+        text = out(text, lambda seg: re.sub(start + r"([A-Z][\w'-]*)", lambda m: m.group(1) if titled(seg[:m.start()])
+                                            else "\0" + m.group(1), seg))
         text = out(text, lambda seg: re.sub(r"(?<![\w'])(?:[A-Z][\w'-]*[ \t]+)+[A-Z][\w'-]*(?![\w'])",
                                             lambda m: tok("NAME", m.group(0)), seg))
         text = out(text, lambda seg: re.sub(r"(\0?)((?<![\w'])[\w'-]*[A-Z][\w'-]*)", lambda m: m.group(2) if m.group(1)
@@ -488,6 +494,7 @@ thus otherwise instead for from in on at by with without about into onto over un
 thanks thank hi hello dear regards best ok okay done good great yes sure result results summary total name names""".split())
 
 
+TITLES = set("mr ms mrs mx dr prof sir capt col gen sgt rev hon st lt maj cpt fr dear".split())
 LOW = {"list", "no", "real", "old", "part", "space"}             # List, No: surnames; list, no: words
 try:                                                            # first names, from a fixed list: never the vault
     FIRST = {w.strip().lower() for w in open("/usr/share/dict/propernames")} - {
