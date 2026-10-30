@@ -267,22 +267,26 @@ class Vault:
         self.find_in(text, scopes)
         if self.dirty:
             self.save()
+        keep = set(scopes)                                     # [EMP_10234] in a file is text, not a placeholder
         for scope in sorted(scopes):
-            text = outside(text, lambda seg: self._scrub(seg, scope))
+            text = self._out(text, lambda seg: self._scrub(seg, scope, keep), keep)
         return text
 
-    def _scrub(self, text, scope):
+    def _out(self, text, f, keep):
+        return outside(text, f, lambda t: self.v["scope"].get(t) in keep)
+
+    def _scrub(self, text, scope, keep):
         ids, forms, res, folded, inner, (digits, numbers), short = self._pattern(scope)
         def sub(r, look):
-            return outside(text, lambda seg: r.sub(lambda m: (look[re.sub(r"[\s_.\-]+", "", m.group(1).lower())]
-                                                              if look is ids else look[m.group(1)]) + m.group(2), seg))
+            return self._out(text, lambda seg: r.sub(lambda m: (look[re.sub(r"[\s_.\-]+", "", m.group(1).lower())]
+                                                              if look is ids else look[m.group(1)]) + m.group(2), seg), keep)
         if res[0]:                                             # whole values first: E-10234 before its 10234
             text = sub(res[0], ids)
         if digits:                                             # dates written out: the DOB's digits
-            text = outside(text, lambda seg: DATE.sub(lambda m: next((digits[d] for d in date_digits(m) if d in digits),
-                                                                     m.group(0)), seg))
+            text = self._out(text, lambda seg: DATE.sub(lambda m: next((digits[d] for d in date_digits(m) if d in digits),
+                                                                     m.group(0)), seg), keep)
         if numbers:                                            # numbers however they are written
-            text = outside(text, lambda seg: numbers.sub(lambda m: digits[re.sub(r"\D", "", m.group(0))], seg))
+            text = self._out(text, lambda seg: numbers.sub(lambda m: digits[re.sub(r"\D", "", m.group(0))], seg), keep)
         if res[1]:
             text = sub(res[1], forms)
         if not inner and not short:
@@ -298,7 +302,7 @@ class Vault:
             if inner and inner.search(fold(w)):
                 return inner.sub(lambda h: folded[h.group(0)], fold(w))
             return "".join(hump(w) for w in re.split(r"(?<=[a-z])(?=[A-Z])", w))
-        return outside(text, lambda seg: re.sub(r"[^\W\d_]+", run, seg))
+        return self._out(text, lambda seg: re.sub(r"[^\W\d_]+", run, seg), keep)
 
     def own(self, text, fresh, scopes=()):
         """Text the caller wrote, which a lower model may have asked it to relay: replaced by rules that
@@ -318,10 +322,6 @@ class Vault:
                 fresh[key] = f"[{kind}_{secrets.token_hex(4)}]"
                 fresh[fresh[key]] = raw
             return fresh[key]
-        back = sorted(fresh.get("\0back", ()), key=len, reverse=True)   # what lego turned back from placeholders
-        if back:
-            text = outside(text, lambda seg: re.sub(r"(?i)(?<![\w])(?:" + "|".join(map(re.escape, back)) + r")(?![\w])",
-                                                    lambda m: tok("NAME", m.group(0)), seg))
         for kind, (p, check) in PATTERNS.items():
             text = outside(text, lambda seg: re.sub(p, lambda m: m.group(0) if check and not check(
                 m.group(1) if m.lastindex else m.group(0)) else tok(kind, m.group(0)), seg))
@@ -361,18 +361,14 @@ class Vault:
             t = m.group(0)
             if fresh and t in fresh:
                 return fresh[t]
-            if t in self.v["real"] and self.v["scope"].get(t) in set(allowed):
-                if fresh is not None:                          # given back: if the caller relays it, it goes as
-                    fresh.setdefault("\0back", set()).add(self.v["real"][t])   # a placeholder, whatever it is
-                return self.v["real"][t]
-            return t
+            return self.v["real"][t] if t in self.v["real"] and self.v["scope"].get(t) in set(allowed) else t
         return re.sub(r"(?<![A-Za-z0-9])" + TOKEN.pattern + r"(?![A-Za-z0-9])", back, text)
 
 
-def outside(text, f):
-    """f applied to the text between placeholders, never inside one."""
+def outside(text, f, keep=lambda t: True):
+    """f applied to the text between placeholders (those `keep` accepts), never inside one."""
     parts = re.split(r"(" + TOKEN.pattern.replace("(", "(?:") + r")", text)
-    return "".join(p if i % 2 else f(p) for i, p in enumerate(parts))
+    return "".join(p if i % 2 and keep(p) else f(p) for i, p in enumerate(parts))
 
 
 MON = "|".join(m[:3] + "(?:" + m[3:] + ")?" for m in MONTHS) + "|sept"

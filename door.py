@@ -273,11 +273,19 @@ class Door:
         """The path with links resolved only until it reaches a private directory; the rest as written,
         so naming a path in a scope never looks at what lies inside it."""
         roots = [d.partition(":")[2] for d in self.scopes if d.startswith(self.host + ":")]
-        cur, parts = "/", [p for p in path.split("/") if p]
-        for k, p in enumerate(parts):
+        cur, rest, hops = "/", [p for p in path.split("/") if p], 0
+        while rest:                                            # one component, one link hop at a time
             if any(inside(cur, r) for r in roots):
-                return os.path.join(cur, *parts[k:])
-            cur = canon(os.path.join(cur, p))
+                return os.path.join(cur, *rest)
+            p = rest.pop(0)
+            nxt = os.path.join(cur, p)
+            if p == "..":
+                cur = os.path.dirname(cur)
+            elif os.path.islink(nxt) and hops < 40:
+                hops, tgt = hops + 1, os.readlink(nxt)
+                cur, rest = ("/" if tgt.startswith("/") else cur), [q for q in tgt.split("/") if q] + rest
+            else:
+                cur = canon(nxt)                               # case and firmlinks only: nxt is no link
         return cur
 
     def give(self, item, node):

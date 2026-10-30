@@ -502,6 +502,46 @@ def test_twelfth_hunt_stays_fixed():
             j.join()
 
 
+def test_thirteenth_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/ids.csv").write_text("name,employee id,phone\nZorbina Quellwater,E-10234,415-555-0134\n")
+        (t / "hr/tags.md").write_text("Ticket [EMP_10234] for [QUELLWATER_1], call [TEL_4155550134].\n")
+        (t / "sealed.txt").write_text("x")
+        (t / "ws/notes.txt").write_text("WS-NOTES")
+        for name, target in (("out.env", t / "sealed.txt"), ("staff.csv", t / "hr/people.csv"),
+                             ("mirror", t / "hr"), ("cur.env", t / "ws/notes.txt"), ("null.env", "/dev/null")):
+            os.symlink(target, t / "keys" / name)                  # links inside keys, each somewhere else
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2").mkdir()
+        view = cloud.read(str(t / "hr/tags.md"))["text"]
+        assert not re.search(r"10234|QUELLWATER|0134", view), view           # placeholder-shaped text is text
+        answers = set()
+        for name in ("out.env", "staff.csv", "mirror", "cur.env", "null.env", "nope"):
+            os.symlink(t / "keys" / name, t / f"ws2/probe_{name}")
+            answers.add(re.sub(r"probe_\S+", "", refusal(cloud, "read", path=f"probe_{name}")))
+            answers.add(json.loads(refusal(cloud, "offload", task="x", inputs=[f"probe_{name}"])).get("row"))
+        assert len(answers) == 2, answers                                       # one refusal, one receipt, for all
+        def relay(echo):
+            d = door.Door({**p, "workspace": str(t / f"ws_{echo}")}, t / f"state_{echo}", "pop")
+            (t / f"ws_{echo}").mkdir()
+            d.prepare(lambda scope: lambda text: [])
+            if echo:                                                            # the cloud echoed a placeholder
+                tok = d.vault.scrub("Zorbina Quellwater 415-555-0134", {"hr"})
+                d.vault.unscrub(tok, {"hr"}, d.fresh)
+            d.read(str(t / "hr/people.csv"))
+            GOT.clear()
+            d.offload("Guesses: zorbina quellwater, orrin vex, 415-555-0134, 415-555-9999.", [], node="cloud")
+            for j in d.jobs:
+                j.join()
+            return shape(re.sub(r"\[([A-Z]+)_[0-9a-f]+\]", r"[\1_0]", GOT[-1][1]))
+        assert relay(True) == relay(False)                                      # the same, whatever lego turned back
+        for j in pop.jobs + cloud.jobs:
+            j.join()
+
+
 def tmp_out():
     return tempfile.mkdtemp() + "/out.txt"
 
@@ -510,6 +550,6 @@ if __name__ == "__main__":
     for f in (test_levels, test_forward_cloud_in_front, test_reverse_local_in_front, test_found_leaks_stay_fixed,
               test_second_hunt_stays_fixed, test_third_hunt_stays_fixed, test_fourth_hunt_stays_fixed,
               test_fifth_hunt_stays_fixed, test_sixth_hunt_stays_fixed, test_seventh_hunt_stays_fixed,
-              test_eighth_hunt_stays_fixed, test_ninth_hunt_stays_fixed, test_tenth_hunt_stays_fixed, test_eleventh_hunt_stays_fixed, test_twelfth_hunt_stays_fixed):
+              test_eighth_hunt_stays_fixed, test_ninth_hunt_stays_fixed, test_tenth_hunt_stays_fixed, test_eleventh_hunt_stays_fixed, test_twelfth_hunt_stays_fixed, test_thirteenth_hunt_stays_fixed):
         f()
         print("ok  ", f.__name__)
