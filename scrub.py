@@ -367,10 +367,7 @@ class Vault:
         not everyday words each get a placeholder of their own, kept in `fresh` for the way back."""
         def keep(t):                                           # placeholders it was given; any other is text
             return t in fresh or self.v["scope"].get(t) in scopes
-
-        def outside(text, f):
-            parts = re.split(r"(" + TOKEN.pattern.replace("(", "(?:") + r")", text)
-            return "".join(p if i % 2 and keep(p) else f(p) for i, p in enumerate(parts))
+        out = lambda text, f: outside(text, f, keep)  # noqa: E731
 
         def tok(kind, raw):
             key = f"{kind}|{fold(flat(raw))}"
@@ -379,23 +376,23 @@ class Vault:
                 fresh[fresh[key]] = raw
             return fresh[key]
         for kind, (p, check) in PATTERNS.items():
-            text = outside(text, lambda seg: re.sub(p, lambda m: m.group(0) if check and not check(
+            text = out(text, lambda seg: re.sub(p, lambda m: m.group(0) if check and not check(
                 m.group(1) if m.lastindex else m.group(0)) else tok(kind, m.group(0)), seg))
-        text = outside(text, lambda seg: DATE.sub(lambda m: tok("DATE", m.group(0)), seg))
-        text = outside(text, lambda seg: re.sub(r"(?<![\w])\d(?:[\s().\-/_,]{0,3}\d){3,}(?![\w])",   # 4+ digits, any way
-                                                lambda m: tok("NUM", m.group(0)), seg))
-        text = outside(text, lambda seg: re.sub(r"(?<![^\W_])(?=[^\W_]*\d)(?=[^\W_]*[^\W\d_])[^\W_]{3,}",   # e10234
-                                                lambda m: tok("ID", m.group(0)), seg))
+        text = out(text, lambda seg: DATE.sub(lambda m: tok("DATE", m.group(0)), seg))
+        text = out(text, lambda seg: re.sub(r"(?<![\w])\d(?:[\s().\-/_,]{0,3}\d){3,}(?![\w])",   # 4+ digits, any way
+                                            lambda m: tok("NUM", m.group(0)), seg))
+        text = out(text, lambda seg: re.sub(r"(?<![^\W_])(?=[^\W_]*\d)(?=[^\W_]*[^\W\d_])[^\W_]{3,}",   # e10234
+                                            lambda m: tok("ID", m.group(0)), seg))
         start = r"(?:^|(?<=[.!?:;]\s)|(?<=[.!?:;]\s\s)|(?<=\n)|(?<=[-*#>]\s))"   # where a capital means nothing
         honor = r"(?<!\bMr\.\s)(?<!\bMs\.\s)(?<!\bDr\.\s)(?<!\bMrs\.\s)(?<!\bMr\s)(?<!\bMs\s)(?<!\bDr\s)(?<!\bDear\s)"
-        text = outside(text, lambda seg: re.sub(start + honor + r"([A-Z][\w'-]*)", lambda m: "\0" + m.group(1), seg))
-        text = outside(text, lambda seg: re.sub(r"(?<![\w'])(?:[A-Z][\w'-]*[ \t]+)+[A-Z][\w'-]*(?![\w'])",
-                                                lambda m: tok("NAME", m.group(0)), seg))
-        text = outside(text, lambda seg: re.sub(r"(\0?)((?<![\w'])[\w'-]*[A-Z][\w'-]*)", lambda m: m.group(2) if m.group(1)
-                                                and m.group(2).lower() in STARTERS else tok("NAME", m.group(2)), seg))
-        return outside(text, lambda seg: re.sub(r"[^\W\d_]+", lambda m: m.group(0) if word(m.group(0)) and not (
+        text = out(text, lambda seg: re.sub(start + honor + r"([A-Z][\w'-]*)", lambda m: "\0" + m.group(1), seg))
+        text = out(text, lambda seg: re.sub(r"(?<![\w'])(?:[A-Z][\w'-]*[ \t]+)+[A-Z][\w'-]*(?![\w'])",
+                                            lambda m: tok("NAME", m.group(0)), seg))
+        text = out(text, lambda seg: re.sub(r"(\0?)((?<![\w'])[\w'-]*[A-Z][\w'-]*)", lambda m: m.group(2) if m.group(1)
+                                            and m.group(2).lower() in STARTERS else tok("NAME", m.group(2)), seg))
+        return out(text, lambda seg: re.sub(r"[^\W\d_]+", lambda m: m.group(0) if word(m.group(0)) and not (
             m.group(0).lower() in FIRST)   # zorbina, mei, 王伟; frank, grace (any case)
-                                                else tok("NAME", m.group(0)), seg).replace("\0", ""))
+                                            else tok("NAME", m.group(0)), seg).replace("\0", ""))
 
     def scrub_name(self, name, scopes, fresh=None):
         """A file name: whole first (emails, numbers), then piece by piece, `alice_nguyen-review.md` ->
