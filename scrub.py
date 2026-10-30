@@ -84,22 +84,26 @@ class Vault:
     def __init__(self, path):
         self.path = Path(path)
         self.v = json.loads(self.path.read_text()) if self.path.exists() else {}
-        for k in ("ids", "parts", "real", "scope", "files"):
+        self.dirty = False
+        for k in ("ids", "parts", "real", "scope", "files", "digits"):
             self.v.setdefault(k, {})
         self._re = None
 
     def save(self):
         self.path.write_text(json.dumps(self.v))
-        self._re = None
+        self._re, self.dirty = None, False
 
     def _new(self, real, kind, scopes):
         n = sum(t.startswith(f"[{kind}_") for t in self.v["real"]) + 1
         token = f"[{kind}_{n}]"
         self.v["real"][token], self.v["scope"][token] = real, sorted(scopes)
+        self._re, self.dirty = None, True
         return token
 
     def _tag(self, token, scopes):
-        self.v["scope"][token] = sorted(set(self.v["scope"].get(token, [])) | set(scopes))
+        if not set(scopes) <= set(self.v["scope"].get(token, [])):
+            self.v["scope"][token] = sorted(set(self.v["scope"].get(token, [])) | set(scopes))
+            self._re, self.dirty = None, True                  # the matchers of those scopes now include it
 
     def add(self, value, kind, scopes):
         value = flat(norm(value)).strip(".'\"")
@@ -112,10 +116,15 @@ class Vault:
             token = self.v["ids"].get(value.lower()) or self._new(value, kind, scopes)
             self.v["ids"][value.lower()] = token
             self._tag(token, scopes)
+            digits = re.sub(r"\D", "", value)
+            if kind in ("PHONE", "SSN", "CARD", "IBAN", "ID", "DOB") and len(digits) >= 7:
+                for d in {digits, digits[-10:]}:                # 4155550134, (415) 555 0134, +1 ...
+                    self.v["digits"].setdefault(d, token)
         if kind == "ADDRESS":                                          # "41 Larkspur Mews" and "Oakhollow" too
             for part in re.split(r"\s*,\s*", value):
-                if len(part) >= 3:
-                    self.v["ids"].setdefault(part.lower(), token)
+                for p in (part, re.sub(r"^\d{1,5}[A-Za-z]?,?\s+", "", part)):   # "Larkspur Mews" too
+                    if len(p) >= 3 and not p.isdigit():
+                        self.v["ids"].setdefault(p.lower(), token)
         if kind == "PERSON":                                           # "Alice" or "Nguyen" alone name her too
             for part in {p for sep in (r"[\s,]+", r"[\s,-]+") for p in re.split(sep, value)}:
                 part = part.strip(".'\"")
@@ -183,9 +192,11 @@ class Vault:
                     if len(p) >= 4 and p.lower() not in COMMON:
                         folded.setdefault(fold(p), t)
             b, e = r"(?<![A-Za-z0-9])", r"(s?)(?![A-Za-z0-9])"     # '_' and '.' separate words; plurals too
+            digits = {d: t for d, t in self.v["digits"].items() if mine(t)}
             self._re[key] = (ids, forms, [re.compile(b + "(" + alt(ks) + ")" + e, fl) if ks else None for ks, fl in
                                           ((ids, re.I), (forms, 0))],
-                             folded, re.compile("|".join(map(re.escape, sorted(folded, key=len, reverse=True)))) if folded else None)
+                             folded, re.compile("|".join(map(re.escape, sorted(folded, key=len, reverse=True)))) if folded else None,
+                             digits)
         return self._re[key]
 
     def scrub(self, text, scopes):
@@ -195,12 +206,14 @@ class Vault:
         text, scopes = norm(text), set(scopes)
         if not scopes:
             return text
-        n = len(self.v["ids"]) + len(self.v["parts"])
         self.find_in(text, scopes)
-        if len(self.v["ids"]) + len(self.v["parts"]) != n:
+        if self.dirty:
             self.save()
-            self._re = None
-        ids, forms, res, folded, inner = self._pattern(scopes)
+        ids, forms, res, folded, inner, digits = self._pattern(scopes)
+        if digits:                                             # numbers however they are written
+            text = re.sub(r"(?<![\w\[])\+?\(?\d[\d ().-]{5,}\d(?![\w\]])", lambda m: next(
+                (digits[d] for d in (re.sub(r"\D", "", m.group(0)), re.sub(r"\D", "", m.group(0))[-10:]) if d in digits),
+                m.group(0)), text)
         for look, r in zip((ids, forms), res):
             if r:
                 text = r.sub(lambda m: (look[flat(m.group(1)).lower()] if look is ids else look[m.group(1)]) + m.group(2), text)

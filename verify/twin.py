@@ -25,6 +25,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import core  # noqa: E402
 import door  # noqa: E402
+door.same_disk = lambda a, b: False                          # stub nodes: no real disk to measure
 
 SCOPES = {1: "hr", 2: "fin", 3: "med"}                         # Lean scope n <-> Python name; 0 is sealed
 NAME = {0: core.SEALED, **SCOPES}

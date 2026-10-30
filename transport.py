@@ -8,10 +8,12 @@ import json
 import secrets
 import shlex
 import subprocess
+import time
 
 RUNNER = r'''
-import json, sys, time, urllib.request
+import json, signal, sys, time, urllib.request
 job = json.loads(sys.stdin.read())
+signal.setitimer(signal.ITIMER_REAL, job["timeout"])     # the whole job, not each read: SIGALRM ends it
 docs = "".join("\n--- %s ---\n%s" % (p, open(p, errors="replace").read()) for p in job["files"])
 body = {"model": job["model"]["model"], "messages": [
     {"role": "system", "content": "You work for the owner of these files. Answer the task from the files only."},
@@ -77,13 +79,17 @@ def schema_json(s):
 
 def run_job(node, files, task, schema, out_path, keep, timeout, salt=None):
     """Run one model call on `node` over `files` (paths on that node). The full output is
-    written to out_path on the node; it comes back only when keep is False."""
+    written to out_path on the node; it comes back only when keep is False. The job is over a second
+    before `timeout`, killed if need be, so the node is idle when the bound the door booked comes."""
+    timeout = max(0.1, timeout - 1.0)
     if node["model"].get("api") == "anthropic":
         return run_anthropic(node, files, task, schema, out_path, keep, timeout)
     job = {"files": files, "task": task, "schema": schema_json(schema) if schema else None,
            "model": node["model"], "out": out_path, "keep": keep, "timeout": timeout, "salt": salt}
-    _sh(node, f"mkdir -p {shlex.quote(out_path.rsplit('/', 1)[0])}")
-    raw = _sh(node, "python3 -c " + shlex.quote(RUNNER), data=json.dumps(job).encode(), timeout=timeout + 5)
+    t0 = time.time()
+    _sh(node, f"mkdir -p {shlex.quote(out_path.rsplit('/', 1)[0])}", timeout=timeout)
+    job["timeout"] = max(0.05, timeout - (time.time() - t0))
+    raw = _sh(node, "python3 -c " + shlex.quote(RUNNER), data=json.dumps(job).encode(), timeout=job["timeout"])
     return json.loads(raw)
 
 

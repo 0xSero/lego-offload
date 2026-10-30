@@ -78,8 +78,8 @@ def session(policy, state, agent, args, capture=None, timeout=None, tty=False):
     except BlockingIOError:
         raise SystemExit("lego: another session is using this policy's nodes or this workspace; run one at a time")
     d = door.Door(policy, state, me)
-    if not d.context <= d.seen:
-        raise SystemExit(f"lego: the workspace holds {sorted(d.context - d.seen)} data from an earlier session, which "
+    if not d.held <= d.seen:
+        raise SystemExit(f"lego: the workspace holds {sorted(d.held - d.seen)} data from an earlier session, which "
                          f"{agent}'s model may not see. Use another workspace, or clear it and run: lego reset --workspace")
     d.prepare(finder(policy), strict=True)
     ds, rs = door.serve(d, 0), route.serve(0, upstream, capture=capture)
@@ -124,7 +124,7 @@ def main(argv):
     if cmd == "reset":
         d = door.Door(policy, state)
         if args == ["--workspace"]:                            # you vouch that it holds no private data now
-            t = {w: v for w, v in d._taints().items() if not door.inside(door.canon(w), d.ws)}   # and folders in it
+            t = {w: v for w, v in d._taints().items() if not door.inside(door.canon(w.lstrip("@")), d.ws)}   # and folders in it
             return d.taint_file.write_text(json.dumps(t))
         return d.reset()
     if cmd == "app":

@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ["LEGO_TAINT"] = tempfile.mkdtemp() + "/taint.json"           # not the user's
 import door  # noqa: E402
+door.same_disk = lambda a, b: False                          # stub nodes: no real disk to measure
 import transport  # noqa: E402
 
 GOT = []                                                       # (node, what the model was given)
@@ -22,6 +23,7 @@ def fake_job(node, files, task, returns, out, keep, timeout, salt=None):     # t
     return {"took": 0.0, "output": None if keep else reply}
 
 
+real_run = transport.run_job
 transport.run_job = fake_job
 CSV = "name,email,salary\nZorbina Quellwater,zq@corp.example,162000\nQuillon Brimstoke,qb@corp.example,118000\n"
 IDS = ["Zorbina", "Quellwater", "Quillon", "Brimstoke", "zq@corp.example", "qb@corp.example", "sk_live_Canary123456789012345",
@@ -214,8 +216,59 @@ def test_fourth_hunt_stays_fixed():
             assert "must be" not in refusal(d, "offload", task="x", inputs=inputs)
 
 
+def test_fifth_hunt_stays_fixed():
+    import http.server
+    import threading
+    import time
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "keys/ops.txt").write_text("ops@corp.example 415-555-0134 41 Larkspur Mews\n")
+        rev = door.Door(p, t / "state", "pop")                               # nothing read yet
+        rev.prepare(lambda scope: lambda text: [])
+        (t / "ws/zorbina_quellwater_letter.md").write_text("Dear Zorbina Quellwater, call 4155550134 at Larkspur Mews")
+        GOT.clear()
+        rev.offload("Polish", ["zorbina_quellwater_letter.md"], node="cloud")   # what pop typed is scrubbed too
+        assert not leaked(GOT[-1][1]) and "4155550134" not in GOT[-1][1] and "Larkspur" not in GOT[-1][1], GOT[-1]
+        assert not door.Door(p, t / "state", "cloud").held <= rev.nodes["cloud"].trust   # later cloud refused
+        r = rev.offload("Write to Zorbina Quellwater", [], node="pop")         # a raw task's output
+        assert "refused" in refusal(rev, "offload", task="polish", inputs=[r["ref"]], node="cloud")
+        v = rev.vault                                                         # re-tagging refreshes the matcher
+        v.scrub("warm the hr matcher", {"hr"})
+        assert "ops@corp" not in v.scrub("mail ops@corp.example", {"hr"})
+        try:                                                                  # a local node on the room's disk
+            door.same_disk = lambda a, b: True
+            door.Door(p, t / "s5", "cloud")
+            raise AssertionError("a local node on the workspace disk was accepted")
+        except door.core.Refused:
+            pass
+        finally:
+            door.same_disk = lambda a, b: False
+
+    class Stall(http.server.BaseHTTPRequestHandler):                          # a model that never answers
+        def do_POST(self):
+            time.sleep(8)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Stall)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    node = {"model": {"model": "m", "base_url": f"http://127.0.0.1:{srv.server_port}/v1"}}
+    t0 = time.time()
+    try:
+        real_run(node, [], "x", None, tmp_out(), False, 3.0)
+    except Exception:
+        pass
+    assert time.time() - t0 < 3.0, time.time() - t0                       # over before the bound, not after
+    srv.shutdown()
+
+
+def tmp_out():
+    return tempfile.mkdtemp() + "/out.txt"
+
+
 if __name__ == "__main__":
     for f in (test_levels, test_forward_cloud_in_front, test_reverse_local_in_front, test_found_leaks_stay_fixed,
-              test_second_hunt_stays_fixed, test_third_hunt_stays_fixed, test_fourth_hunt_stays_fixed):
+              test_second_hunt_stays_fixed, test_third_hunt_stays_fixed, test_fourth_hunt_stays_fixed,
+              test_fifth_hunt_stays_fixed):
         f()
         print("ok  ", f.__name__)

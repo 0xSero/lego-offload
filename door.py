@@ -75,6 +75,12 @@ def canon(p):
         os.close(fd)
 
 
+def same_disk(a, b):
+    """Whether two paths' nearest existing folders are on one file system (the room can df its own)."""
+    dev = lambda p: os.stat(next(q for q in [p, *Path(p).parents] if os.path.exists(q))).st_dev  # noqa: E731
+    return dev(a) == dev(b)
+
+
 def inside(a, b):
     return a == b or a.startswith(b.rstrip("/") + "/")
 
@@ -109,10 +115,19 @@ class Door:
         self.me = self.nodes[caller] if caller else core.Node("", frozenset())
         self.seen = self.me.trust
         self.raw = {s for s in self.seen if not s.endswith("~")}  # scopes the caller sees as written
+        for n, v in policy["nodes"].items():                   # a hidden job's output size must not show in df
+            if runnable(v) and not v.get("ssh") and n != self.host and \
+                    set(self.scopes.values()) & set(v["trust"]) - self.seen and same_disk(v["out"], self.ws):
+                raise core.Refused(f"{n} keeps its jobs' files on the workspace's disk, where the agent could "
+                                   f"measure them: give it ssh, or a \"dir\" on another volume")
         self.taint_file = Path(os.environ.get("LEGO_TAINT", "~/.lego/taint.json")).expanduser()  # per workspace,
         self.taint_file.parent.mkdir(parents=True, exist_ok=True)                            # every policy
-        self.context = {s for w, t in self._taints().items() if inside(canon(w), self.ws) or inside(self.ws, canon(w))
-                        for s in t}                            # given to the caller, its workspace, nested ones too
+        near = {w: t for w, t in self._taints().items() if inside(canon(w.lstrip("@")), self.ws)
+                or inside(self.ws, canon(w.lstrip("@")))}      # this workspace, and ones nested in or around it
+        self.context = {s for w, t in near.items() if not w.startswith("@") for s in t}   # given to the caller
+        self.held = self.context | {s for w, t in near.items() if w.startswith("@") for s in t}  # and what an agent
+        if self.raw & set(self.scopes.values()):               # that sees them raw may have typed there
+            self._record("@" + self.ws, self.raw & set(self.scopes.values()))
         self.vault = scrub.Vault(self.state / "vault.json")
         self.ledger_file = self.state / "ledger.json"
         if not self.ledger_file.exists():
@@ -138,11 +153,15 @@ class Door:
     def taint(self, scopes):
         """The caller was given these scopes: so were its workspace files, for this and every later session."""
         self.context |= set(scopes)
+        self.held |= set(scopes)
+        self._record(self.ws, self.context)
+
+    def _record(self, key, scopes):
         with open(self.taint_file, "a+") as f:
             fcntl.flock(f, fcntl.LOCK_EX)
             f.seek(0)
             t = json.loads(f.read() or "{}")
-            t[self.ws] = sorted(set(t.get(self.ws, [])) | self.context)
+            t[key] = sorted(set(t.get(key, [])) | set(scopes))
             f.seek(0), f.truncate(), f.write(json.dumps(t))
 
     def _note(self, **kw):
@@ -161,14 +180,14 @@ class Door:
         return frozenset(scopes) - self.seen
 
     def prepare(self, find=None, strict=False):
-        """Before anything crosses: learn the identifiers of every private file some model sees scrubbed.
+        """Before anything crosses: learn the identifiers of every private file some model may not see raw.
         find(scope) gives a function that lists identifiers with a local model trusted with that scope."""
-        scrubbed = {s[:-1] for n in self.nodes.values() for s in n.trust if s.endswith("~") and s[:-1] not in n.trust}
+        scrubbed = {s for n, v in self.p["nodes"].items() if runnable(v) for s in set(self.scopes.values()) - self.nodes[n].trust}
         for d in [d for d, s in self.scopes.items() if s in scrubbed]:
             node, _, root = d.partition(":")
             f = find(self.scopes[d]) if find else None
             if strict and not f:
-                raise core.Refused(f"{self.scopes[d]} is seen scrubbed, but no local model sees it raw to find its names")
+                raise core.Refused(f"{self.scopes[d]} is hidden from some model, but no local model sees it raw to find its names")
             for path in transport.files(self.p["nodes"][node], root, limit=None):
                 self.learn(f"{node}:{path}", transport.read(self.p["nodes"][node], path, 600), self.scopes[d], f)
 
@@ -243,8 +262,12 @@ class Door:
     def tags(self, item):
         """Whose identifiers to replace in an item. In what the caller wrote, only those of scopes it sees
         as written: replacing others would tell it which of its guesses the vault holds."""
-        tags = {s.rstrip("~") for s in item.scopes}
-        return tags & self.raw if item.node == self.host and inside(item.ref.partition(":")[2], self.ws) else tags
+        if self.mine(item):                                    # it may hold anything the caller sees raw
+            return self.raw & set(self.scopes.values())
+        return {s.rstrip("~") for s in item.scopes}
+
+    def mine(self, item):
+        return item.ref == "task" or item.node == self.host and inside(item.ref.partition(":")[2], self.ws)
 
     def level(self, scope, node=None):
         t = (node or self.me).trust
@@ -352,16 +375,18 @@ class Door:
         views = [self.give(i, self.me) for i in ins]
         srcs = views if returns is None and all(views) else [(i, False) for i in ins]
         n = self.pick_node([i for i, _ in srcs], node)
-        given = [(g, s or s2) for (i, s), (g, s2) in zip(srcs, (self.give(i, self.nodes[n]) for i, _ in srcs))]
         everything = set(self.scopes.values()) <= self.nodes[n].trust
+        given = [(g, s or s2 or (self.mine(i) and not everything and bool(self.tags(i))))   # what the caller wrote:
+                 for (i, s), (g, s2) in zip(srcs, (self.give(i, self.nodes[n]) for i, _ in srcs))]  # like its task
         scrub_task = given[-1][1] or not everything            # names it saw in this tool's text, too
         task = self.vault.scrub(task, self.raw & set(self.scopes.values())) if scrub_task else task
+        typed = set() if scrub_task else self.raw & set(self.scopes.values())   # a raw task's output may hold them
         with self.locks[n]:                                    # one decision at a time per node
             t0 = time.time()
             out, row, ledger, start, end = self.decide(n, [g for g, _ in given], returns, t0)
             self._note(op="offload", node=n, ref=out.ref, inputs=[i.ref for i in ins[:-1]], scopes=sorted(out.scopes),
                        scrubbed=[s for _, s in given], row=row, bits=core.bits(returns) if row == "shaped" else 0)
-            self.refs[out.ref] = out.scopes
+            self.refs[out.ref] = out.scopes | typed
             turn, self.tickets[n] = self.tickets[n], self.tickets[n] + 1
             run = lambda: self._run(n, given[:-1], task, returns, out, row, end, turn, everything)  # noqa: E731
             if row == "full":                                  # the caller may see it: the node is surely idle

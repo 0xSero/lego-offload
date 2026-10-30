@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import door  # noqa: E402
+door.same_disk = lambda a, b: False                          # stub nodes: no real disk to measure
 import transport  # noqa: E402
 
 POLICY = {"host": "mac", "workspace": "/ws", "public": ["/ws/a.py"], "deadline": 0.5, "job_timeout": 1.0,
