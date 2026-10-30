@@ -394,7 +394,9 @@ class Door:
         if it.node == self.host and os.path.isdir(path):     # only once the level allows it
             return {"row": "listing", "text": self.listing()}
         if it.node == self.host and not os.path.isfile(path):
-            raise core.Refused(f"no file {ref}. read \".\" lists what you can name.")
+            raise core.Refused(f"no file {ref}" + (" in your workspace; private files go by the full paths listed under "
+                               "Private directories" if not ref.startswith("/") and ref.partition(":")[0] not in self.nodes
+                               else "") + ". read \".\" lists what you can name.")
         text, before = self.bytes_of(*got).decode(errors="replace"), self.cut_off()
         self.taint(got[0].scopes)
         self._note(op="read", ref=it.ref, scopes=sorted(got[0].scopes), scrubbed=got[1])
@@ -549,7 +551,8 @@ class Door:
         others = [n for n, v in self.p["nodes"].items() if runnable(v) and n != self.caller]
         kinds = sorted(set(self.scopes.values()))
         return ("lego guards the user's private files. Your own shell and file tools cannot open them; the `read` "
-                "and `offload` tools can, at the level shown.\nPrivate directories:\n" + self.catalog() +
+                "and `offload` tools can, at the level shown.\nPrivate directories (name files by these full paths):\n" +
+                self.catalog() +
                 f"\nYour workspace: {self.ws}. Relative paths mean files there. Anything else is sealed.\n"
                 "Other models: " + ("; ".join(f"{n} (sees " + ", ".join(f"{s}: {self.level(s, self.nodes[n])}"
                                                                        for s in kinds) + ")" for n in others) or "none") +
