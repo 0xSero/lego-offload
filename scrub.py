@@ -228,6 +228,10 @@ class Vault:
         self.v["files"][name] = hashlib.sha256(raw.encode()).hexdigest()
         self.save()
 
+    def copy_of(self, text):
+        """Whether the text is a learned private file, byte for byte (only a whole file matches)."""
+        return hashlib.sha256(norm(text).encode()).hexdigest() in set(self.v["files"].values())
+
     def known(self, name, data):
         text = norm(text_of(data) or "")
         return self.v["files"].get(name) == hashlib.sha256(text.encode()).hexdigest()

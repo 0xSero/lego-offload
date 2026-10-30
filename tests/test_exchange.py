@@ -538,6 +538,18 @@ def test_thirteenth_hunt_stays_fixed():
                 j.join()
             return shape(re.sub(r"\[([A-Z]+)_[0-9a-f]+\]", r"[\1_0]", GOT[-1][1]))
         assert relay(True) == relay(False)                                      # the same, whatever lego turned back
+        (t / "hr/low.md").write_text("frank wants a raise; brown is on leave.\n")
+        (t / "hr/people.csv").write_text((t / "hr/people.csv").read_text() + "Frank Brown,fb@corp.example,1,2,3\n")
+        d = door.Door({**p, "workspace": str(t / "ws_copy")}, t / "state_copy", "pop")
+        (t / "ws_copy").mkdir()
+        d.prepare(lambda scope: lambda text: [])
+        (t / "ws_copy/low.md").write_bytes((t / "hr/low.md").read_bytes())   # pop copies an hr file whole
+        d.read(str(t / "hr/low.md"))
+        GOT.clear()
+        d.offload("Summarise", ["low.md"], node="cloud")
+        for j in d.jobs:
+            j.join()
+        assert "frank" not in GOT[-1][1] and "brown" not in GOT[-1][1], GOT[-1][1]   # as the vault scrubs the original
         for j in pop.jobs + cloud.jobs:
             j.join()
 

@@ -324,7 +324,8 @@ class Door:
         text = scrub.text_of(data)
         if text is None:
             raise core.Refused("not a text file, so it cannot be scrubbed")
-        return self.vault.scrub(text, self.tags(item, to), self.fresh if self.mine(item) else None).encode()
+        copy = self.mine(item) and self.vault.copy_of(text)    # a private file copied whole: scrubbed as one
+        return self.vault.scrub(text, self.tags(item, to), self.fresh if self.mine(item) and not copy else None).encode()
 
     def tags(self, item, node=None):
         """Whose identifiers to replace in an item going to `node`. A private file: its own scopes the
