@@ -51,9 +51,8 @@ def read(node, path, timeout=60):
 
 def files(node, root, limit=200):
     """The regular files under a directory on a node: the first `limit` for a listing, all with None."""
-    out = _sh(node, f"find {shlex.quote(root)} -type f 2>/dev/null | sort" + (f" | head -{limit}" if limit else "") + "; true",
-              timeout=120)
-    return [line for line in out.decode(errors="replace").splitlines() if line]
+    out = _sh(node, f"find {shlex.quote(root)} -type f -print0 2>/dev/null; true", timeout=120)   # names may hold newlines
+    return sorted(f for f in out.decode(errors="replace").split("\0") if f)[:limit]
 
 
 def put(node, dst_dir, name, data, timeout=60):

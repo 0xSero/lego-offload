@@ -278,15 +278,16 @@ class Door:
         lines = []
         for d, s in self.scopes.items():
             node, _, root = d.partition(":")
-            lvl, found = self.level(s), transport.files(self.p["nodes"][node], root)
+            lvl, found = self.level(s), transport.files(self.p["nodes"][node], root, limit=None)
             shown = root if node == self.host else d
             lines.append(f"  {shown}  [{s}]  you see: {lvl}" + {
                 "everything": "", "scrubbed": " (same data; names, emails, phones, addresses, account numbers "
-                "and keys replaced by stable placeholders such as [PERSON_3])",
+                "and keys replaced by stable placeholders such as [PERSON_3f9a])",
                 "nothing": f" ({len(found)} files, names hidden: pass the directory to offload with `returns`)"}[lvl])
             raw = lvl == "everything" and all(s in v.trust for n, v in self.nodes.items() if runnable(self.p["nodes"][n]))
             new = 0
-            for f in found[:60] if lvl != "nothing" else []:
+            shown_names = []
+            for f in (found[:60] if raw else found) if lvl != "nothing" else []:
                 if f"{node}:{f}" not in self.learned and not raw and not self.vault.known(
                         f"{node}:{f}", transport.read(self.p["nodes"][node], f)):
                     new += 1                                   # not learned: its name may hold an identifier
@@ -294,7 +295,8 @@ class Door:
                 name = f"{shown}{f[len(root):] if raw else self.vault.scrub_name(f[len(root):], [s])}"
                 self.alias[name] = f"{node}:{f}"
                 self.learned.add(f"{node}:{f}")
-                lines.append("    " + name)
+                shown_names.append("    " + name)
+            lines += sorted(shown_names)[:60]                  # in their shown order: the raw order is private
             if new:
                 lines.append(f"    ({new} files added since lego started: restart lego to use them)")
         lines += [f"  {r}" for r in self.p.get("catalog", [])]
@@ -364,7 +366,7 @@ class Door:
             if node == self.host and inside(path, self.ws) and not os.path.exists(path):   # its own files only
                 raise core.Refused(f"no file {r} in your workspace. read \".\" lists what you can name.")
             found = [] if it.ref in self.refs or core.SEALED in it.scopes else transport.files(self.p["nodes"][node], path)
-            out += [self.item(f"{node}:{f}", internal=True) for f in found] if found and found != [path] else [it]
+            out += [self.item(f"{node}:{f}", internal=True) for f in found if inside(f, path)] if found and found != [path] else [it]
         return out
 
     def offload(self, task, inputs=(), returns=None, node=None):

@@ -1,15 +1,17 @@
 """Scrub: the middle level, "scrubbed". A model that sees a scope scrubbed gets the same text with
 every identifier (names, emails, phones, addresses, account numbers, keys) swapped for a stable
-placeholder such as [PERSON_3]: the same person is the same placeholder in every file and message,
+placeholder such as [PERSON_3f9a]: the same person is the same placeholder in every file and message,
 so the data still joins up. The vault (identifier -> placeholder) is learned from the private files
 before any of them crosses, lives only on this host, and turns placeholders back into the real
 values, each only for a model that sees its scope raw.
 """
 import csv
 import hashlib
+import hmac
 import io
 import json
 import re
+import secrets
 import unicodedata
 from pathlib import Path
 
@@ -61,7 +63,8 @@ COLUMNS = [("EMAIL", r"e ?mail"), ("PHONE", r"phone|mobile|\btel\b|telefon|cell"
 COMMON = set("will mark may june april august grace hope faith joy rose pat bill rob sue art guy ray dawn summer frank "
              "long young little black white brown green king bell hill wood page lane gray grey rich chase hunter "
              "major price love case cash ward stone field park banks miles holly ivy jack sky".split())
-TOKEN = re.compile(r"\[([A-Z]+)_(\d+)\]")
+TOKEN = re.compile(r"\[([A-Z]+)_([0-9a-f]+)\]")
+SEP = r"[ ().\-/]{0,2}"                                         # between the digits of a written number
 CF = dict.fromkeys(c for c in range(0x10000) if unicodedata.category(chr(c)) == "Cf")
 
 
@@ -84,9 +87,12 @@ class Vault:
     def __init__(self, path):
         self.path = Path(path)
         self.v = json.loads(self.path.read_text()) if self.path.exists() else {}
+        if "key" not in self.v:                                 # an old vault numbered its placeholders: relearn
+            self.v = {}
         self.dirty = False
         for k in ("ids", "parts", "real", "scope", "files", "digits"):
             self.v.setdefault(k, {})
+        self.v.setdefault("key", secrets.token_hex(16))         # placeholder tags: nothing about other scopes
         self._re = None
 
     def save(self):
@@ -94,8 +100,8 @@ class Vault:
         self._re, self.dirty = None, False
 
     def _new(self, real, kind, scopes):
-        n = sum(t.startswith(f"[{kind}_") for t in self.v["real"]) + 1
-        token = f"[{kind}_{n}]"
+        mac = hmac.new(bytes.fromhex(self.v["key"]), f"{kind}|{real}".encode(), "sha256").hexdigest()
+        token = next(t for n in range(4, 65) for t in [f"[{kind}_{mac[:n]}]"] if t not in self.v["real"])
         self.v["real"][token], self.v["scope"][token] = real, sorted(scopes)
         self._re, self.dirty = None, True
         return token
@@ -117,14 +123,19 @@ class Vault:
             self.v["ids"][value.lower()] = token
             self._tag(token, scopes)
             digits = re.sub(r"\D", "", value)
+            forms = {digits, digits[-10:]}                      # 4155550134, (415) 555 0134, +1 ...
+            ymd = re.fullmatch(r"(\d{4})\D(\d{1,2})\D(\d{1,2})|(\d{1,2})\D(\d{1,2})\D(\d{4})", value)
+            if kind == "DOB" and ymd:                           # 1985-03-14 = 14/03/1985 = 03.14.1985
+                y, a, b = ymd.group(1, 2, 3) if ymd.group(1) else (ymd.group(6), ymd.group(4), ymd.group(5))
+                forms = {y + a.zfill(2) + b.zfill(2), a.zfill(2) + b.zfill(2) + y, b.zfill(2) + a.zfill(2) + y}
             if kind in ("PHONE", "SSN", "CARD", "IBAN", "ID", "DOB") and len(digits) >= 7:
-                for d in {digits, digits[-10:]}:                # 4155550134, (415) 555 0134, +1 ...
-                    self.v["digits"].setdefault(d, token)
+                for d in forms:
+                    self._tag(self.v["digits"].setdefault(d, token), scopes)
         if kind == "ADDRESS":                                          # "41 Larkspur Mews" and "Oakhollow" too
             for part in re.split(r"\s*,\s*", value):
                 for p in (part, re.sub(r"^\d{1,5}[A-Za-z]?,?\s+", "", part)):   # "Larkspur Mews" too
                     if len(p) >= 3 and not p.isdigit():
-                        self.v["ids"].setdefault(p.lower(), token)
+                        self._tag(self.v["ids"].setdefault(p.lower(), token), scopes)
         if kind == "PERSON":                                           # "Alice" or "Nguyen" alone name her too
             for part in {p for sep in (r"[\s,]+", r"[\s,-]+") for p in re.split(sep, value)}:
                 part = part.strip(".'\"")
@@ -134,8 +145,9 @@ class Vault:
                 have = self.v["parts"].get(part)
                 if have is None:
                     self.v["parts"][part] = token if whole else self._new(part, kind, scopes)
-                elif whole and have != token and self.v["real"].get(have) != part:
-                    self.v["parts"][part] = self._new(part, kind, scopes)  # two people share it: its own token
+                elif whole and have != token and self.v["real"].get(have) != part:   # two people share it: its own
+                    self.v["parts"][part] = self._new(part, kind, set(scopes) | set(self.v["scope"].get(have, [])))  # token,
+                                                                   # matched in every scope that matched it before
                 self._tag(self.v["parts"][part], scopes)
 
     def find_in(self, text, scopes):
@@ -193,10 +205,12 @@ class Vault:
                         folded.setdefault(fold(p), t)
             b, e = r"(?<![A-Za-z0-9])", r"(s?)(?![A-Za-z0-9])"     # '_' and '.' separate words; plurals too
             digits = {d: t for d, t in self.v["digits"].items() if mine(t)}
+            short = {fold(p): t for p, t in self.v["parts"].items() if mine(t) and len(p) < 4 and p.lower() not in COMMON}
             self._re[key] = (ids, forms, [re.compile(b + "(" + alt(ks) + ")" + e, fl) if ks else None for ks, fl in
                                           ((ids, re.I), (forms, 0))],
                              folded, re.compile("|".join(map(re.escape, sorted(folded, key=len, reverse=True)))) if folded else None,
-                             digits)
+                             (digits, re.compile(r"(?<!\d)(?:" + "|".join(SEP.join(d) for d in sorted(digits, key=len, reverse=True))
+                                                 + r")(?!\d)") if digits else None), short)
         return self._re[key]
 
     def scrub(self, text, scopes):
@@ -209,21 +223,21 @@ class Vault:
         self.find_in(text, scopes)
         if self.dirty:
             self.save()
-        ids, forms, res, folded, inner, digits = self._pattern(scopes)
-        if digits:                                             # numbers however they are written
-            text = re.sub(r"(?<![\w\[])\+?\(?\d[\d ().-]{5,}\d(?![\w\]])", lambda m: next(
-                (digits[d] for d in (re.sub(r"\D", "", m.group(0)), re.sub(r"\D", "", m.group(0))[-10:]) if d in digits),
-                m.group(0)), text)
+        ids, forms, res, folded, inner, (digits, numbers), short = self._pattern(scopes)
+        if numbers:                                            # numbers however they are written
+            text = numbers.sub(lambda m: digits[re.sub(r"\D", "", m.group(0))], text)
         for look, r in zip((ids, forms), res):
             if r:
                 text = r.sub(lambda m: (look[flat(m.group(1)).lower()] if look is ids else look[m.group(1)]) + m.group(2), text)
-        if not inner:
+        if not inner and not short:
             return text
 
+        def hump(w):                                           # MeiNg: short names as whole humps
+            return short.get(fold(w)) or (inner.sub(lambda h: folded[h.group(0)], fold(w)) if inner and inner.search(fold(w)) else w)
+
         def run(m):                                            # zorbinaQuellwater2, quillonbrimstoke, Jose for José
-            w = m.group(0)
-            return inner.sub(lambda h: folded[h.group(0)], fold(w)) if inner.search(fold(w)) else w
-        return re.sub(r"\[[A-Z]+_\d+\]|[^\W\d_]+", lambda m: m.group(0) if m.group(0)[0] == "[" else run(m), text)
+            return "".join(hump(w) for w in re.split(r"(?<=[a-z])(?=[A-Z])", m.group(0)))
+        return re.sub(r"\[[A-Z]+_[0-9a-f]+\]|[^\W\d_]+", lambda m: m.group(0) if m.group(0)[0] == "[" else run(m), text)
 
     def scrub_name(self, name, scopes):
         """A file name: whole first (emails, numbers), then piece by piece, `alice_nguyen-review.md` ->

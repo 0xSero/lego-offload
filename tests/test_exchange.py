@@ -262,6 +262,28 @@ def test_fifth_hunt_stays_fixed():
     srv.shutdown()
 
 
+def test_sixth_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/people.csv").write_text(CSV.replace("162000", "162000,415-555-0134,1985-03-14").replace(
+            "name,email,salary", "name,email,salary,phone,dob").replace("118000", "118000,415-555-9999,1990-01-02"))
+        (t / "hr/Mei_Ng.md").write_text("Mei Ng: fine")
+        (t / "hr/zz_Quillon.md").write_text("Quillon asked")
+        (t / "keys/owners.csv").write_text("owner\nQuillon Strand\n")     # shares a first name with hr
+        d = door.Door(p, t / "state", "cloud")
+        d.prepare(lambda scope: lambda text: [("PERSON", "Mei Ng")] if "Mei" in text else [])
+        assert not leaked(d.read(str(t / "hr/people.csv"))["text"])
+        text = d.vault.scrub("Quillon wrote 4155550134 162000, born 14/03/1985; MeiNg_notes", {"hr"})
+        assert not leaked(text) and "4155550134" not in text and "14/03/1985" not in text and "MeiNg" not in text, text
+        names = [ln.strip() for ln in d.about().splitlines() if "/hr/" in ln and not ln.strip().startswith(str(t))]
+        assert names == sorted(names) and not leaked("".join(names)), names   # shown order, nothing raw
+        assert all(len(k.split("_")[-1]) >= 5 for k in d.vault.v["real"])    # [EMAIL_7f3a]: no count of other scopes
+        os.makedirs(str(t / "ws/g1/x") + "\n" + str(t) + "/hr")                        # a forged find line
+        Path(str(t / "ws/g1/x") + "\n" + str(t) + "/hr/people.csv").write_text("x")
+        (t / "ws/g1/x").write_text("x")
+        assert all("hr" not in i.scopes for i in d.items(["g1"]))
+
+
 def tmp_out():
     return tempfile.mkdtemp() + "/out.txt"
 
@@ -269,6 +291,6 @@ def tmp_out():
 if __name__ == "__main__":
     for f in (test_levels, test_forward_cloud_in_front, test_reverse_local_in_front, test_found_leaks_stay_fixed,
               test_second_hunt_stays_fixed, test_third_hunt_stays_fixed, test_fourth_hunt_stays_fixed,
-              test_fifth_hunt_stays_fixed):
+              test_fifth_hunt_stays_fixed, test_sixth_hunt_stays_fixed):
         f()
         print("ok  ", f.__name__)

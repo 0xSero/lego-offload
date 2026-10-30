@@ -13,7 +13,7 @@ The policy says, per model, how much of each private directory it **sees**:
 | Level | The model gets |
 |-|-|
 | `everything` | the raw bytes |
-| `scrubbed` | the same data, with every name, email, phone, address, account number and key swapped for a stable placeholder such as `[PERSON_3]` |
+| `scrubbed` | the same data, with every name, email, phone, address, account number and key swapped for a stable placeholder such as `[PERSON_3f9a]` |
 | `nothing` | no bytes. It may ask small typed questions, paid in bits from an allowance, or get a receipt |
 
 One exchange rule covers every byte that moves between models, in either direction: **an item crosses raw if the receiver sees its scopes, scrubbed if it sees them scrubbed, and not at all otherwise.** The agent's task text and its workspace carry every scope it has been given, so they cross by the same rule. A result comes back in full only if the agent could have seen all of its inputs; otherwise it is a shaped answer at a fixed time, or a receipt.
@@ -221,7 +221,7 @@ All numbers come from the last `./run`. [`results/REPORT.md`](results/REPORT.md)
 | reverse | omp | summary | ok | 4,213 | read, offload to cloud, full |
 | reverse | omp | keys (asked to send them) | ok, refused | 4,213 | refused |
 
-7/7 tasks done, 0 of 76 canaries in any byte the cloud got. In reverse mode the cloud saw only placeholders (`[PERSON_3]`, `[EMAIL_1]`) and omp got the real names back. Most of the forward bytes are Claude Code's own system prompt and tools.
+7/7 tasks done, 0 of 76 canaries in any byte the cloud got. In reverse mode the cloud saw only placeholders (`[PERSON_3f9a]`, `[EMAIL_51c0]`) and omp got the real names back. Most of the forward bytes are Claude Code's own system prompt and tools.
 
 **Leak hunts.** Three rounds of adversarial agents (a forward attacker, a reverse attacker, and a skeptic that reproduces each claim offline) attacked the door between real runs. They confirmed 13, 4 and 11 leaks. Each is fixed and has a case in `tests/test_exchange.py`. Examples: a model's output on raw data was handed back scrubbed (whitespace in a schema-valid JSON reply carried the names); an unscrubbed reply was labelled only `hr~`; file names held emails and SSNs; `read` told an existing private path from a missing one.
 
@@ -249,13 +249,14 @@ All numbers come from the last `./run`. [`results/REPORT.md`](results/REPORT.md)
 - launder through its workspace: workspace files carry every scope the agent has been given (a public path inside the workspace too), and that label, kept in `~/.lego/taint.json` for every policy, outlives the session (a later agent that may not see it is refused until `lego reset --workspace`); the workspace may not overlap a private directory, lego's state or a local model's directory; links and hardlinks are labelled where the bytes really are, and a file is pinned by inode when it is labelled, so swapping it for a link before the job reads it fails the job;
 - use the scrubber as an oracle: placeholders are turned back into real values only for a model that sees their scope raw, only for the job's own scopes, and never in a refusal;
 - get a model's output scrubbed: scrubbing applies only to source files learnt when lego starts. A job's output on data the caller may not see raw leaves the door only as its shaped answer, because a model can encode names in ways no scrubber finds;
+- count or order what it cannot see: placeholder tags are a keyed hash of the value, not a running count, and scrubbed names are listed in their scrubbed order;
 - probe names: a caller that sees a scope scrubbed may name its files only by the placeholder names it was shown, and the level is checked before the file system is touched, so a guessed path gets the same refusal whether or not it exists. Files added after lego starts are counted, not named, until lego restarts and learns them;
 - borrow another model's level: each cloud agent runs as the policy's model with its own `api`, and an agent with no entry sees nothing.
 
 **Not covered:**
 
 - **Scrubbed means de-identified, not secret.** A model that sees a scope scrubbed gets every number, date and sentence in it; only identifiers become placeholders. The vault finds them by pattern, by CSV column and by asking a local model, so an identifier none of the three catches (an unusual nickname, a name spelled out letter by letter) crosses as written. The proof's bound is about what lies beyond the scrubbed view, so it says nothing about how good the scrubber is. The canary runs below measure that.
-- **Local agent in front: it is trusted, the cloud is not.** With `lego omp`, what crosses to the cloud is what your local agent chooses to write, scrubbed. Every known identifier is replaced, but the agent decides what to say about the data. The cloud's replies are untrusted text that the local agent reads, so a cloud reply could try to talk it into sending more (prompt injection). The level still holds: nothing from a scope the cloud sees as `nothing` crosses once the agent has read it, because its context then carries that scope.
+- **Local agent in front: it is trusted, the cloud is not.** With `lego omp`, what crosses to the cloud is what your local agent chooses to write, scrubbed. Every known identifier is replaced, but the agent decides what to say about the data. The cloud's replies are untrusted text that the local agent reads, so a cloud reply could try to talk it into sending more (prompt injection). The level still holds: nothing from a scope the cloud sees as `nothing` crosses once the agent has read it, because its context then carries that scope. One case worth naming: if the cloud asks your agent to send back a list of names "as written", the scrubber replaces the ones it knows with the same placeholders the cloud saw in the files, which tells the cloud which guess is behind which placeholder. Lego cannot tell a relayed list from your agent's own words, so your agent should not relay text the cloud asked it to.
 
 - **Bits are bits.** 16 bits about hr is enough for one exact salary if the agent asks `int[100000, 150000]`. The allowance bounds how much is learnt, not which facts, so size each scope's allowance with that in mind.
 - **The host is trusted.** All bytes between nodes pass through the Mac, and policy requires the Mac to be trusted with every scope.
