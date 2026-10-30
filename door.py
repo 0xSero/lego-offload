@@ -345,13 +345,14 @@ class Door:
             node, _, root = d.partition(":")
             lvl, found = self.level(s), transport.files(self.p["nodes"][node], root)
             shown = root if node == self.host else d
+            hidden = any(self.level(s, self.nodes[n]) == "nothing" for n, v in self.p["nodes"].items() if runnable(v))
             lines.append(f"  {shown}  [{s}]  you see: {lvl}" + {
-                "everything": "", "scrubbed": " (same data; names, emails, phones, addresses, account numbers "
+                "everything": " (names masked as #tags: some model sees nothing of it; read them by tag)" if hidden else "",
+                "scrubbed": " (same data; names, emails, phones, addresses, account numbers "
                 "and keys replaced by stable placeholders such as [PERSON_3f9a])",
                 "nothing": f" ({len(found)} files, names hidden: pass the directory to offload with `returns`)"}[lvl])
             raw = lvl == "everything" and all(s in v.trust for n, v in self.nodes.items() if runnable(self.p["nodes"][n]))
             new, shown_names = 0, []
-            hidden = any(self.level(s, self.nodes[n]) == "nothing" for n, v in self.p["nodes"].items() if runnable(v))
             for f in (found[:60] if raw else found) if lvl != "nothing" else []:
                 if f"{node}:{f}" not in self.learned and not raw and not self.vault.known(
                         f"{node}:{f}", transport.read(self.p["nodes"][node], f)):
