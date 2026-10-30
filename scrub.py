@@ -313,15 +313,12 @@ class Vault:
         return self._re[scope]
 
     def scrub(self, text, scopes, fresh=None):
-        """The text with every known identifier of `scopes` replaced, each scope by its own table.
-        Identifiers the files did not hold are found by pattern and learned on the spot.
-        `fresh`: text the caller wrote. See own()."""
+        """The text with every known identifier of `scopes` replaced, each scope by its own table. Nothing
+        is learned here: a table holds only what its own scope's files held when lego started, so one
+        scope's view never depends on another's data. `fresh`: text the caller wrote. See own()."""
         text = norm(text)
         if fresh is not None:
             return self.own(text, fresh, set(scopes)) if scopes else text
-        self.find_in(text, scopes)
-        if self.dirty:
-            self.save()
         keep = set(scopes)                                     # [EMP_10234] in a file is text, not a placeholder
         for scope in sorted(scopes):
             text = self._out(text, lambda seg: self._scrub(seg, scope, keep), keep)
@@ -358,16 +355,25 @@ class Vault:
 
         most = max(map(len, [*short, *folded]), default=0)
 
-        def split(w):                                          # liwei, ngmei: wholly known parts, any order
-            best = {0: []}
+        back = ({k[::-1]: v for k, v in short.items()}, {k[::-1]: v for k, v in folded.items()})
+
+        def chain(w, sh, fo):                                  # the longest run of known parts w starts with: two
+            best, end = {0: []}, 0                             # or more, or one long one (liwei..., zhangwei...)
             for i in range(len(w)):
                 for j in range(i + 2, min(len(w), i + most) + 1) if i in best else ():
-                    if j not in best and (w[i:j] in short or w[i:j] in folded):
-                        best[j] = best[i] + [short.get(w[i:j]) or folded[w[i:j]]]
-            return "".join(best[len(w)]) if len(best.get(len(w), [])) > 1 else None
+                    if j not in best and (w[i:j] in sh or w[i:j] in fo):
+                        best[j] = best[i] + [sh.get(w[i:j]) or fo[w[i:j]]]
+                        end = j if len(best[j]) > 1 or w[i:j] in fo else end
+            return best[end], end
+
+        def ends(w):                                           # liweiAdmin, adminNgMei: known parts at either end
+            head, a = chain(w, short, folded)
+            tail, b = chain(w[a:][::-1], *back)
+            mid = w[a:len(w) - b]
+            return "".join(head) + (parts(mid) or mid) + "".join(tail[::-1]) if a or b else None
 
         def run(m):                                            # MeiNg: short names as whole humps
-            return split(fold(m.group(0))) or parts(m.group(0)) or "".join(short.get(fold(w)) or parts(w) or w
+            return ends(fold(m.group(0))) or parts(m.group(0)) or "".join(short.get(fold(w)) or parts(w) or w
                                                 for w in re.split(r"(?<=[a-z])(?=[A-Z])", m.group(0)))
         return self._out(text, lambda seg: re.sub(r"[^\W\d_]+", run, seg), keep)
 
@@ -395,8 +401,9 @@ class Vault:
         text = out(text, lambda seg: re.sub(r"(?<![^\W_])(?=[^\W_]*\d)(?=[^\W_]*[^\W\d_])[^\W_]{3,}",   # e10234
                                             lambda m: tok("ID", m.group(0)), seg))
         start = r"(?:^|(?<=[.!?:;]\s)|(?<=[.!?:;]\s\s)|(?<=\n)|(?<=[-*#>]\s))"   # where a capital means nothing
-        honor = "".join(rf"(?<!\b{t}\s)(?<!\b{t}\s\s)" for t in (r"[A-Z]\.", "Dear", *(  # J. Read, Prof. Good
-            x + d for x in "Mr Ms Mrs Mx Dr Prof Sir Capt Col Gen Sgt Rev Hon St Lt Maj Cpt Fr".split() for d in ("", r"\."))))
+        honor = "".join(rf"(?<!\b{t}\s)(?<!\b{t}\s\s)" for t in (*(rf"[A-Z][a-z]{{{n}}}\." for n in range(5)), "Dear", *(
+            x + d for x in "Mr Ms Mrs Mx Dr Prof Sir Capt Col Gen Sgt Rev Hon St Lt Maj Cpt Fr".split()   # J. Read, Det. Good,
+            for x in (x, x.lower()) for d in ("", r"\."))))                                             # prof. Best
         text = out(text, lambda seg: re.sub(start + honor + r"([A-Z][\w'-]*)", lambda m: "\0" + m.group(1), seg))
         text = out(text, lambda seg: re.sub(r"(?<![\w'])(?:[A-Z][\w'-]*[ \t]+)+[A-Z][\w'-]*(?![\w'])",
                                             lambda m: tok("NAME", m.group(0)), seg))

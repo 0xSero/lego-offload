@@ -385,9 +385,10 @@ class Door:
 
     def listing(self):
         files = []
-        for root, dirs, names in os.walk(self.ws):
-            dirs[:] = sorted(d for d in dirs if not d.startswith("."))
-            files += [os.path.relpath(os.path.join(root, n), self.ws) for n in sorted(names)]
+        for root, dirs, names in os.walk(self.ws):             # a link is a name, wherever it points
+            links = [d for d in dirs if os.path.islink(os.path.join(root, d))]
+            dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in links)
+            files += [os.path.relpath(os.path.join(root, n), self.ws) for n in sorted(names + links)]
         return (f"Your workspace {self.ws} (relative paths mean files here):\n" +
                 "\n".join("  " + f for f in files[:200]) + "\nPrivate directories:\n" + self.catalog())
 

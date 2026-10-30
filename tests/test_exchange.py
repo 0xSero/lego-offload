@@ -677,6 +677,38 @@ def test_eighteenth_hunt_stays_fixed():
             j.join()
 
 
+def test_nineteenth_hunt_stays_fixed():
+    import scrub
+    v = scrub.Vault(tempfile.mkdtemp() + "/v.json")
+    for text in ("Det. Read signs.", "Sen. Good agrees.", "Mme. Best", "dr. Read", "prof. Good"):
+        out = v.own(scrub.norm(text), {}, {"hr"})
+        assert not re.search(r"\b(Read|Good|Best)\b", out), (text, out)      # a surname after any title
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/staff.csv").write_text("name,phone\nWei Li,415-555-0134\nMei Ng,1\nZhang Wei,2\n")
+        (t / "hr/logins.md").write_text("liweiAdmin, ngmeiDev, weiliOps, zhangweiops, MEINGadmin, adminliwei\n")
+        (t / "keys/notes.md").write_text("vendor line 5550134, rotate monthly\n")
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [])
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        (t / "ws2").mkdir()
+        view = cloud.read(str(t / "hr/logins.md"))["text"]
+        assert not re.search(r"(?i)li|wei|mei|ng", view), view                  # known parts glued, with a suffix
+        before = json.dumps(pop.vault.v["by"].get("keys", {}), sort_keys=True)
+        pop.vault.scrub((t / "hr/staff.csv").read_text(), {"hr", "keys"})       # a copy scrubbed for both scopes
+        assert json.dumps(pop.vault.v["by"].get("keys", {}), sort_keys=True) == before   # keys' table learns no hr
+        listings = []
+        for target in ("keys/sub", "keys/none"):                              # a link into keys, found or not
+            if target == "keys/sub":
+                (t / target).mkdir()
+            os.symlink(t / target, t / "ws2/probe")
+            listings.append(cloud.read(".")["text"])
+            os.unlink(t / "ws2/probe")
+        assert listings[0] == listings[1], listings
+        for j in pop.jobs + cloud.jobs:
+            j.join()
+
+
 def test_own_precision():
     """Caller text: everyday and technical words stay as written; names, in any of the forms the hunts used, do not."""
     import scrub
