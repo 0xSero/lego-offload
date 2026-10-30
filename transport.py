@@ -16,6 +16,8 @@ docs = "".join("\n--- %s ---\n%s" % (p, open(p, errors="replace").read()) for p 
 body = {"model": job["model"]["model"], "messages": [
     {"role": "system", "content": "You work for the owner of these files. Answer the task from the files only."},
     {"role": "user", "content": job["task"] + "\n" + docs}]}
+if "temperature" in job:
+    body["temperature"] = job["temperature"]
 if job.get("salt"):
     body["cache_salt"] = job["salt"]     # prompt cache shared only by jobs with the same scopes
 if job["schema"]:
@@ -45,11 +47,22 @@ def read(node, path):
     return _sh(node, "cat " + shlex.quote(path))
 
 
+def files(node, root, limit=200):
+    """The regular files under a directory on a node (for the catalog and the vault)."""
+    out = _sh(node, f"find {shlex.quote(root)} -type f -size -2M 2>/dev/null | sort | head -{limit}; true")
+    return [line for line in out.decode(errors="replace").splitlines() if line]
+
+
+def put(node, dst_dir, name, data):
+    """Write bytes into a new file on a node and return its path."""
+    dst = f"{dst_dir}/{secrets.token_hex(8)}-{name}"
+    _sh(node, f"mkdir -p {shlex.quote(dst_dir)} && cat > {shlex.quote(dst)}", data=data)
+    return dst
+
+
 def copy(src_node, src_path, dst_node, dst_dir):
     """Copy one file between nodes (through this host) and return its path on dst."""
-    dst = f"{dst_dir}/{secrets.token_hex(8)}-{src_path.rsplit('/', 1)[-1]}"
-    _sh(dst_node, f"mkdir -p {shlex.quote(dst_dir)} && cat > {shlex.quote(dst)}", data=read(src_node, src_path))
-    return dst
+    return put(dst_node, dst_dir, src_path.rsplit("/", 1)[-1], read(src_node, src_path))
 
 
 def schema_json(s):
@@ -69,6 +82,8 @@ def schema_json(s):
 def run_job(node, files, task, schema, out_path, keep, timeout, salt=None):
     """Run one model call on `node` over `files` (paths on that node). The full output is
     written to out_path on the node; it comes back only when keep is False."""
+    if node["model"].get("api") == "anthropic":
+        return run_anthropic(node, files, task, schema, out_path, keep, timeout)
     job = {"files": files, "task": task, "schema": schema_json(schema) if schema else None,
            "model": node["model"], "out": out_path, "keep": keep, "timeout": timeout, "salt": salt}
     _sh(node, f"mkdir -p {shlex.quote(out_path.rsplit('/', 1)[0])}")
@@ -76,9 +91,63 @@ def run_job(node, files, task, schema, out_path, keep, timeout, salt=None):
     return json.loads(raw)
 
 
+IDS = {"type": "object", "additionalProperties": False, "required": ["identifiers"], "properties": {"identifiers": {
+    "type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["kind", "text"], "properties": {
+        "kind": {"enum": ["PERSON", "ADDRESS", "USERNAME", "ID"]}, "text": {"type": "string"}}}}}}
+
+
+def find_ids(node, text):
+    """Ask a node's model (trusted with the text) for the identifiers in it: [(kind, text)]."""
+    task = ("List every personal identifier in the text below: full names and lone first or last names of people, "
+            "street addresses, usernames and handles, personal ID or account numbers. Copy each exactly as written. "
+            "Not company names, job titles, places alone, dates or amounts.\n\n" + text[:60000])
+    out = f"{node['stage']}/ids-{secrets.token_hex(8)}.txt"
+    job = {"files": [], "task": task, "schema": IDS, "model": node["model"], "out": out, "keep": False, "timeout": 600,
+           "temperature": 0}
+    _sh(node, f"mkdir -p {shlex.quote(node['stage'])}")
+    r = json.loads(_sh(node, "python3 -c " + shlex.quote(RUNNER), data=json.dumps(job).encode(), timeout=630))
+    try:
+        return [(i["kind"], i["text"]) for i in json.loads(r["output"])["identifiers"]]
+    except (ValueError, KeyError, TypeError):
+        return []
+
+
 def answer(output):
     """Pull the typed answer out of a constrained JSON reply (anything odd -> None)."""
     try:
-        return json.loads(output)["answer"]
+        return json.loads(output.strip().removeprefix("```json").removesuffix("```"))["answer"]
     except (ValueError, TypeError, KeyError):
         return None
+
+
+def run_anthropic(node, files, task, schema, out_path, keep, timeout):
+    """A cloud model as a node: the files were written to this host's stage, the call goes out from here
+    with the user's Claude login. No output cap: max_tokens is the model's own maximum."""
+    import os
+    import time
+    import urllib.request
+    import route
+    docs = "".join(f"\n--- {p.rsplit('/', 1)[-1].split('-', 1)[-1]} ---\n" + open(p, errors="replace").read() for p in files)
+    sys = "Answer the task from the files only."
+    if schema:
+        sys += " Reply with only a JSON object matching: " + json.dumps(schema_json(schema))
+    sys = [{"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."},  # the login's
+           {"type": "text", "text": sys}]                                                          # required opener
+    body = {"model": node["model"]["model"], "max_tokens": node["model"].get("max_tokens", 128000), "stream": True,
+            "system": sys, "messages": [{"role": "user", "content": task + "\n" + docs}]}
+    t0 = time.time()
+    req = urllib.request.Request("https://api.anthropic.com/v1/messages", data=json.dumps(body).encode(), headers={
+        "content-type": "application/json", "anthropic-version": "2023-06-01", "anthropic-beta": "oauth-2025-04-20",
+        **route.claude_auth()})
+    out = []
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        for line in r:
+            if line.startswith(b"data:"):
+                ev = json.loads(line[5:])
+                if ev.get("type") == "content_block_delta" and ev["delta"].get("type") == "text_delta":
+                    out.append(ev["delta"]["text"])
+    text = "".join(out)
+    os.makedirs(out_path.rsplit("/", 1)[0], exist_ok=True)
+    open(out_path, "w").write(text)
+    json.dump({"request": body, "response": text}, open(out_path + ".trace.json", "w"))   # what the cloud got
+    return {"took": time.time() - t0, "output": None if keep else text}

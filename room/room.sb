@@ -1,5 +1,5 @@
 ;; room.sb -- deny-by-default Room for a coding agent. Parameters (sandbox-exec -D): WS, HOME_DIR,
-;; AGENT_DIR (realpaths: the sandbox matches resolved paths), ROUTE_PORT, DOOR_PORT. See room.py.
+;; AGENT_DIR, LIB_DIR (realpaths: the sandbox matches resolved paths), ROUTE_PORT, DOOR_PORT. See room.py.
 
 (version 1)
 (deny default)
@@ -48,7 +48,8 @@
        (subpath "/usr/bin")
        (subpath "/private/var/db/timezone")
        (subpath "/private/var/select")
-       (subpath (param "AGENT_DIR")))
+       (subpath (param "AGENT_DIR"))
+       (subpath (param "LIB_DIR")))
 
 (allow file-read*
        (literal "/")
@@ -68,7 +69,8 @@
        (literal "/etc") (literal "/tmp") (literal "/var")
        (path-ancestors (param "WS"))
        (path-ancestors (param "HOME_DIR"))
-       (path-ancestors (param "AGENT_DIR")))
+       (path-ancestors (param "AGENT_DIR"))
+       (path-ancestors (param "LIB_DIR")))
 
 ;; ---------------------------------------------------------------- files: read/write
 (allow file-read* file-write*

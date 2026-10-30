@@ -81,7 +81,13 @@ def readable(raw, enc=""):
 
 
 def serve(port, upstream="anthropic", capture=None):
-    host, prefixes, secret, beta = UPSTREAMS[upstream]
+    """`upstream`: a name in UPSTREAMS, or the http:// URL of a local model (no credential)."""
+    if upstream.startswith("http://"):
+        host, prefixes, secret, beta = upstream[7:].split("/")[0], ("/",), dict, None
+    else:
+        host, prefixes, secret, beta = UPSTREAMS[upstream]
+    conn_for = (lambda: http.client.HTTPConnection(host, timeout=600)) if upstream.startswith("http://") else \
+        (lambda: http.client.HTTPSConnection(host, 443, timeout=600))
     cache, lock = {}, threading.Lock()
 
     def creds():
@@ -123,7 +129,7 @@ def serve(port, upstream="anthropic", capture=None):
             hdrs.update({**real, "Host": host, "Content-Length": str(len(body))})
             got, status, enc = [], None, ""
             for attempt in range(3):                       # DNS on this host flakes; nothing was sent yet
-                conn = http.client.HTTPSConnection(host, 443, timeout=600)
+                conn = conn_for()
                 try:
                     conn.connect()
                     break

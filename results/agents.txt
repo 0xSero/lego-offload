@@ -3,3 +3,4 @@ ok   claude  credentials in room: 0, model via route: True, tools via door: True
 ok   codex   credentials in room: 0, model via route: True, tools via door: True, upstream hosts named: none, upstream codex
 ok   cursor  credentials in room: 0, model via route: True, tools via door: True, upstream hosts named: none, upstream cursor
 ok   cline   credentials in room: 0, model via route: True, tools via door: True, upstream hosts named: none, upstream openrouter
+ok   omp     credentials in room: 0, model via route: True, tools via door: True, upstream hosts named: none, upstream local model

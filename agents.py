@@ -86,9 +86,27 @@ def cline(home, route_url, door_url, args, ws):
     return [b, *args], os.path.dirname(b), {"CLINE_NO_AUTO_UPDATE": "1", "DISABLE_AUTOUPDATER": "1", "DISABLE_UPDATES": "1"}
 
 
-# name: (adapter, route upstream)
+def omp(home, route_url, door_url, args, ws, model=None):
+    """oh-my-pi on a local model: the route forwards to the model's URL. omp's native modules stay
+    in ~/.omp/natives, mapped read-only into the room (env LEGO_LIB_DIR)."""
+    d = Path(home, ".omp/agent")
+    d.mkdir(parents=True)
+    (d / "models.yml").write_text(json.dumps({"providers": {"lego": {
+        "baseUrl": f"{route_url}/v1", "apiKey": PLACEHOLDER, "api": "openai-completions", "models": [{
+            "id": model["model"], "name": model["model"], "reasoning": True, "input": ["text"],
+            "contextWindow": model.get("context", 262144), "maxTokens": model.get("context", 262144),
+            "omitMaxOutputTokens": True, "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}}]}}}))
+    (d / "config.yml").write_text(json.dumps({"modelRoles": {"default": f"lego/{model['model']}"},
+                                              "startup": {"quiet": True}}))
+    (d / "mcp.json").write_text(json.dumps({"mcpServers": {"lego": {"type": "http", "url": door_url, "timeout": 900000}}}))
+    b = _bin("omp")
+    return [b, *args], os.path.dirname(b), {"PI_NATIVES_DIR": os.path.realpath(os.path.expanduser("~/.omp/natives")),
+                                            "LEGO_LIB_DIR": os.path.realpath(os.path.expanduser("~/.omp/natives"))}
+
+
+# name: (adapter, route upstream; None: the agent runs on a local model, the route goes to its URL)
 AGENTS = {"claude": (claude, "anthropic"), "codex": (codex, "codex"),
-          "cursor": (cursor, "cursor"), "cline": (cline, "openrouter")}
+          "cursor": (cursor, "cursor"), "cline": (cline, "openrouter"), "omp": (omp, None)}
 
 
 def cline_reply(out):
@@ -104,5 +122,6 @@ ONESHOT = {"claude": (lambda p: ["-p", p, "--output-format", "json", "--dangerou
            "codex": (lambda p: ["exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", p],
                      lambda out: out),
            "cursor": (lambda p: ["-p", p, "--yolo", "--trust"], lambda out: out),
-           "cline": (lambda p: ["-y", "--json", p], cline_reply)}
+           "cline": (lambda p: ["-y", "--json", p], cline_reply),
+           "omp": (lambda p: ["-p", "--no-session", "--approval-mode", "yolo", "--no-title", p], lambda out: out)}
 

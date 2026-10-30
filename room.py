@@ -21,19 +21,21 @@ def check(*dirs):
                     raise PermissionError(f"room: hardlinked file {p}")
 
 
-def launch(agent, args, ws, home, route_port, door_port, env=(), timeout=900, agent_dir=None, tty=False):
+def launch(agent, args, ws, home, route_port, door_port, env=(), timeout=900, agent_dir=None, tty=False, lib_dir=None):
     """Run `agent args...` in the room. With tty the agent gets this terminal (interactive use);
-    otherwise stdin is closed and stdout/stderr come back as text in the CompletedProcess."""
+    otherwise stdin is closed and stdout/stderr come back as text in the CompletedProcess.
+    lib_dir: one more read-only directory of the agent's own code (omp's native modules)."""
     ws, home = os.path.realpath(ws), os.path.realpath(home)    # the sandbox sees real paths
     agent = os.path.realpath(agent)
     agent_dir = os.path.realpath(agent_dir or os.path.dirname(agent))
+    lib_dir = os.path.realpath(lib_dir or agent_dir)
     os.makedirs(f"{home}/tmp", exist_ok=True)
     check(ws, home)
     e = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": home, "TMPDIR": f"{home}/tmp", "USER": os.environ["USER"],
          "LANG": "en_US.UTF-8", "TERM": os.environ.get("TERM", "xterm-256color") if tty else "dumb",
          "SHELL": "/bin/bash", "TRACK_EXEMPT": "1", **dict(env)}
     sb = ["/usr/bin/sandbox-exec", "-f", str(PROFILE), "-D", f"WS={ws}", "-D", f"HOME_DIR={home}",
-          "-D", f"AGENT_DIR={agent_dir}", "-D", f"ROUTE_PORT={route_port}", "-D", f"DOOR_PORT={door_port}"]
+          "-D", f"AGENT_DIR={agent_dir}", "-D", f"LIB_DIR={lib_dir}", "-D", f"ROUTE_PORT={route_port}", "-D", f"DOOR_PORT={door_port}"]
     if tty:
         return subprocess.run(sb + [agent, *args], cwd=ws, env=e, timeout=timeout)
     return subprocess.run(sb + [agent, *args], cwd=ws, env=e, capture_output=True, text=True,

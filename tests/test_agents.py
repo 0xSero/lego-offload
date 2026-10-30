@@ -46,7 +46,8 @@ def main():
         home = tempfile.mkdtemp(prefix="lego-test-home-")
         try:
             try:
-                argv, install, env = adapter(home, ROUTE, DOOR, ["-p", "hi"], home)
+                argv, install, env = adapter(home, ROUTE, DOOR, ["-p", "hi"], home, **(
+                    {"model": {"model": "local-model", "url": "http://127.0.0.1:9/v1"}} if upstream is None else {}))
             except SystemExit as e:
                 print(f"skip {name:7} {e}")
                 continue
@@ -59,7 +60,7 @@ def main():
             ok = not leaked and routed and tools and not other and os.path.isdir(install)
             failed += not ok
             print(f"{'ok  ' if ok else 'FAIL'} {name:7} credentials in room: {leaked}, model via route: {routed}, "
-                  f"tools via door: {tools}, upstream hosts named: {other or 'none'}, upstream {upstream}")
+                  f"tools via door: {tools}, upstream hosts named: {other or 'none'}, upstream {upstream or 'local model'}")
         finally:
             shutil.rmtree(home, ignore_errors=True)
     sys.exit(1 if failed else 0)

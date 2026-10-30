@@ -8,6 +8,7 @@ Types:  Scope = str      a name such as "hr"; an empty scope set means public
         Node(name, trust)          a machine and the scopes it may hold
         Item(ref, scopes, node)    some data, its scopes, the machine holding the bytes
 Bricks: label  move  run  shape  charge  clock  queue   (release composes shape, charge, clock)
+        scrubbed: the scopes of an item's scrubbed form ("hr" -> "hr~"), a scope of its own
 """
 import hashlib
 import math
@@ -70,6 +71,12 @@ def check_policy(public, scopes):
 
 def may_hold(node, scopes):
     return scopes <= node.trust
+
+
+def scrubbed(scopes):
+    """Scrubbing (scrub.py) keeps the data and swaps its identifiers. The result is labelled with the
+    scope's scrubbed twin, "hr~", which a policy grants on its own. Sealed data is never scrubbed."""
+    return frozenset(s if s == SEALED or s.endswith("~") else s + "~" for s in scopes)
 
 
 def move(item, node):
