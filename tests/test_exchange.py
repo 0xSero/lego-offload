@@ -296,6 +296,8 @@ def test_seventh_hunt_stays_fixed():
         listing = pop.read(".")["text"]
         assert "globex" not in listing and "prod.env" not in listing, listing   # keys: the cloud sees nothing
         assert any(i.ref.endswith("prod.env") for i in pop.items([ln.strip() for ln in listing.splitlines() if "/#" in ln][:2]))
+        tag = next(ln.strip() for ln in listing.splitlines() if "/#" in ln).rsplit("/", 1)[1]
+        assert pop.item("keys/" + tag).scopes == {"keys"}                    # the tail of a listed name will do
         text = pop.vault.scrub("frank_brown FrankBrown frank-brown Ms O\u2019Brien born 3/4/1985, id E10234", {"hr"})
         assert not any(w in text for w in ("rank", "Brien", "1985", "10234")), text
         cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")

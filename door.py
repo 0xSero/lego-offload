@@ -204,7 +204,9 @@ class Door:
         """The caller's name for some data -> an item with its scopes. Refusals echo only `asked`."""
         if not self.alias and not internal:
             self.catalog()                                     # the names the caller may use
-        asked, ref = ref, self.alias.get(ref, ref)             # a name shown scrubbed means its real file
+        ends = [a for a in self.alias if a.endswith("/" + ref.lstrip("/"))] if ref not in self.alias else []
+        asked, ref = ref, self.alias.get(ref, self.alias[ends[0]] if len(ends) == 1 else ref)   # a name shown
+                                                               # scrubbed (or its tail) means its real file
         internal = internal or asked in self.alias
         mine = [r for r in self.refs if r.partition(":")[2] == ref]
         ref = mine[0] if len(mine) == 1 else ref               # a result ref given without its node
@@ -534,11 +536,14 @@ def serve(door, port):
             except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
                 reply = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "bad request"}}
             body = json.dumps(reply).encode() if reply else b""
-            self.send_response(200 if reply else 202)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.send_response(200 if reply else 202)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):   # the agent left before its reply
+                pass
 
     srv = ThreadingHTTPServer(("127.0.0.1", port), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
