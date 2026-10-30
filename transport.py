@@ -43,8 +43,8 @@ def _sh(node, cmd, data=None, timeout=60):
     return r.stdout
 
 
-def read(node, path):
-    return _sh(node, "cat " + shlex.quote(path))
+def read(node, path, timeout=60):
+    return _sh(node, "cat " + shlex.quote(path), timeout=timeout)
 
 
 def files(node, root, limit=200):
@@ -53,16 +53,11 @@ def files(node, root, limit=200):
     return [line for line in out.decode(errors="replace").splitlines() if line]
 
 
-def put(node, dst_dir, name, data):
+def put(node, dst_dir, name, data, timeout=60):
     """Write bytes into a new file on a node and return its path."""
     dst = f"{dst_dir}/{secrets.token_hex(8)}-{name}"
-    _sh(node, f"mkdir -p {shlex.quote(dst_dir)} && cat > {shlex.quote(dst)}", data=data)
+    _sh(node, f"mkdir -p {shlex.quote(dst_dir)} && cat > {shlex.quote(dst)}", data=data, timeout=timeout)
     return dst
-
-
-def copy(src_node, src_path, dst_node, dst_dir):
-    """Copy one file between nodes (through this host) and return its path on dst."""
-    return put(dst_node, dst_dir, src_path.rsplit("/", 1)[-1], read(src_node, src_path))
 
 
 def schema_json(s):
@@ -87,7 +82,7 @@ def run_job(node, files, task, schema, out_path, keep, timeout, salt=None):
     job = {"files": files, "task": task, "schema": schema_json(schema) if schema else None,
            "model": node["model"], "out": out_path, "keep": keep, "timeout": timeout, "salt": salt}
     _sh(node, f"mkdir -p {shlex.quote(out_path.rsplit('/', 1)[0])}")
-    raw = _sh(node, "python3 -c " + shlex.quote(RUNNER), data=json.dumps(job).encode(), timeout=timeout + 30)
+    raw = _sh(node, "python3 -c " + shlex.quote(RUNNER), data=json.dumps(job).encode(), timeout=timeout + 5)
     return json.loads(raw)
 
 
@@ -97,10 +92,14 @@ IDS = {"type": "object", "additionalProperties": False, "required": ["identifier
 
 
 def find_ids(node, text):
-    """Ask a node's model (trusted with the text) for the identifiers in it: [(kind, text)]."""
+    """Ask a node's model (trusted with the text) for the identifiers in it: [(kind, text)], window by window."""
+    return list(dict.fromkeys(x for i in range(0, max(len(text), 1), 50000) for x in _find(node, text[i:i + 52000])))
+
+
+def _find(node, text):
     task = ("List every personal identifier in the text below: full names and lone first or last names of people, "
             "street addresses, usernames and handles, personal ID or account numbers. Copy each exactly as written. "
-            "Not company names, job titles, places alone, dates or amounts.\n\n" + text[:60000])
+            "Not company names, job titles, places alone, dates or amounts.\n\n" + text)
     out = f"{node['stage']}/ids-{secrets.token_hex(8)}.txt"
     job = {"files": [], "task": task, "schema": IDS, "model": node["model"], "out": out, "keep": False, "timeout": 600,
            "temperature": 0}
@@ -142,6 +141,8 @@ def run_anthropic(node, files, task, schema, out_path, keep, timeout):
     out = []
     with urllib.request.urlopen(req, timeout=timeout) as r:
         for line in r:
+            if time.time() > t0 + timeout:                      # the whole call, not each read, is bounded
+                raise TimeoutError("cloud job ran past its limit")
             if line.startswith(b"data:"):
                 ev = json.loads(line[5:])
                 if ev.get("type") == "content_block_delta" and ev["delta"].get("type") == "text_delta":

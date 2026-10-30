@@ -3,92 +3,193 @@ every identifier (names, emails, phones, addresses, account numbers, keys) swapp
 placeholder such as [PERSON_3]: the same person is the same placeholder in every file and message,
 so the data still joins up. The vault (identifier -> placeholder) is learned from the private files
 before any of them crosses, lives only on this host, and turns placeholders back into the real
-values for a model that sees everything.
+values, each only for a model that sees its scope raw.
 """
 import csv
+import hashlib
 import io
 import json
 import re
+import unicodedata
 from pathlib import Path
 
-PATTERNS = {"EMAIL": r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+",
-            "PHONE": r"(?:\+\d{1,3}[ .-]?)?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}\b|\+\d[\d .-]{8,}\d",
-            "SSN": r"\b\d{3}-\d{2}-\d{4}\b",
-            "CARD": r"\b\d{4}(?:[ -]?\d{4}){2}[ -]?\d{1,7}\b",
-            "IBAN": r"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){3,7}\b",
-            "IP": r"\b\d{1,3}(?:\.\d{1,3}){3}\b",
-            "ADDRESS": r"\b\d{1,5}[A-Za-z]? (?:[A-Z][a-z]+ ){1,3}(?:Street|St|Road|Rd|Avenue|Ave|Lane|Ln|Mews|Drive|Dr|Way|"
-                       r"Court|Ct|Place|Pl|Boulevard|Blvd|Terrace|Close|Crescent|Row|Square|Gardens|Hill|Park)\b",
-            "KEY": r"\b(?=[\w-]*\d)(?=[\w-]*[A-Za-z])[\w-]{24,}\b"}
-COLUMNS = [("EMAIL", r"e-?mail"), ("PHONE", r"phone|mobile|tel"), ("ADDRESS", r"address|street"),
-           ("SSN", r"ssn|social"), ("ID", r"(^|_)id$|passport|account|iban|card"),
-           ("PERSON", r"name|manager|employee|person|contact")]
+
+def _luhn(s):
+    d = [int(c) for c in s if c.isdigit()][::-1]
+    return sum(x if i % 2 == 0 else x * 2 - 9 * (x > 4) for i, x in enumerate(d)) % 10 == 0
+
+
+def _iban(s):
+    s = s.replace(" ", "")
+    return int("".join(str(int(c, 36)) for c in s[4:] + s[:4])) % 97 == 1
+
+
+def _token(s):                                                 # random-looking: mixed case and digits, or hex
+    return bool(re.fullmatch(r"[0-9a-f]{32,}", s)) or all(re.search(p, s) for p in ("[a-z]", "[A-Z]", "[0-9]"))
+
+
+# kind: (pattern, check). Patterns are linear (no nested repeats); a check rejects look-alikes.
+PATTERNS = {
+    "KEY": (r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----|\beyJ[\w-]+\.eyJ[\w-]+\.[\w-]*"
+            r"|\b(?:[sr]k_(?:live|test)_|sk-(?:proj-|ant-)?|gh[pousr]_|github_pat_|xox[abposr]-|AIza|hf_|glpat-)[\w-]{16,}"
+            r"|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", None),
+    "SECRET": (r"(?i:passw(?:or)?d|pwd|secret|token|api[_-]?key|access[_-]?key)\s*[=:]\s*[\"']?([^\s\"']{6,})", None),
+    "TOKEN": (r"(?<![\w+/=-])[A-Za-z0-9+/_-]{24,}={0,2}", _token),
+    "EMAIL": (r"(?<![\w.+-])[\w.+-]{1,64}@[\w-]+(?:\.[\w-]+)+", None),
+    "SSN": (r"\b\d{3}-\d{2}-\d{4}\b", None),
+    "CARD": (r"\b(?:\d{4}(?:[ -]?\d{4}){2}[ -]?\d{1,7}|\d{4}[ -]?\d{6}[ -]?\d{4,5})\b", _luhn),
+    "IBAN": (r"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,3})?\b", _iban),
+    "PHONE": (r"(?:\+\d{1,3}[ .-]?)?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}\b|\+\d{1,3}(?:[ -]?\(0?\d{0,4}\)\d{0,4}|[ -]\d{1,8}"
+              r"|\.\d{2,5}){2,6}\b|\+\d{8,15}\b|\b0\d{1,4}[ -]?\d{3,4}[ -]?\d{2,4}\b",
+              lambda s: 8 <= sum(c.isdigit() for c in s) <= 15),
+    "IP": (r"\b(?:\d{1,3}\.){3}\d{1,3}\b", lambda s: all(int(x) < 256 for x in s.split("."))),
+    "ADDRESS": (r"\b\d{1,5}[A-Za-z]?,? (?:[A-Z][\w'’]+ ){1,3}(?:Street|St|Road|Rd|Avenue|Ave|Lane|Ln|Mews|Drive|Dr|Way"
+                r"|Court|Ct|Place|Pl|Boulevard|Blvd|Terrace|Close|Crescent|Row|Square|Gardens|Hill|Park|Loop|Highway"
+                r"|Hwy|Parkway|Pkwy|Circle|Trail|Walk|Grove|Green|Rise|Parade|Quay|Wharf)\b"
+                r"|\b\d{1,4},? (?:rue|avenue|boulevard|place|chemin|quai|via|viale|piazza|calle|avenida|plaza)"
+                r"(?: (?:de|du|des|la|le|del|di)| [A-ZÀ-Ý][\w'’-]+){1,4}"
+                r"|\b[A-ZÄÖÜ][a-zäöüß]+(?:straße|strasse|weg|gasse|platz|allee|ring) \d{1,4}[a-z]?\b", None),
+}
+COLUMNS = [("EMAIL", r"e ?mail"), ("PHONE", r"phone|mobile|\btel\b|telefon|cell"),
+           ("ADDRESS", r"address|street|post ?code|zip|city|town"),
+           ("SSN", r"ssn|social|\bni\b|national insurance|tax ?id|\btin\b"), ("DOB", r"birth|\bdob\b"),
+           ("ID", r"\bid\b|passport|account|iban|card|sort ?code|(?:employee|staff) (?:no|number)"),
+           ("PERSON", r"^(?:full |first |last |given |middle |preferred |legal |sur|fore|employee |contact |manager "
+                      r"|patient |client |customer |member )?name$|^(?:manager|employee|patient|client|customer|contact"
+                      r"|owner|author|recipient|sender|person|holder|user)$")]
+# first names that are also everyday words: matched only as capitalised or upper case
+COMMON = set("will mark may june april august grace hope faith joy rose pat bill rob sue art guy ray dawn summer frank "
+             "long young little black white brown green king bell hill wood page lane gray grey rich chase hunter "
+             "major price love case cash ward stone field park banks miles holly ivy jack sky".split())
 TOKEN = re.compile(r"\[([A-Z]+)_(\d+)\]")
+CF = dict.fromkeys(c for c in range(0x10000) if unicodedata.category(chr(c)) == "Cf")
+
+
+def norm(s):
+    """NFKC, invisible format characters removed, a hyphen at a line break joined."""
+    return re.sub(r"-\n\s*", "", unicodedata.normalize("NFKC", s).translate(CF))
+
+
+def flat(s):
+    return re.sub(r"\s+", " ", s.strip())
 
 
 class Vault:
     def __init__(self, path):
         self.path = Path(path)
-        self.v = json.loads(self.path.read_text()) if self.path.exists() else {"ids": {}, "real": {}, "files": []}
+        self.v = json.loads(self.path.read_text()) if self.path.exists() else {}
+        for k in ("ids", "parts", "real", "scope", "files"):
+            self.v.setdefault(k, {})
+        self._re = None
 
     def save(self):
         self.path.write_text(json.dumps(self.v))
         self._re = None
 
-    def add(self, value, kind):
-        value = value.strip()
-        if len(value) < 3 or TOKEN.fullmatch(value) or value.lower() in self.v["ids"]:
-            return
+    def _new(self, real, kind, scopes):
         n = sum(t.startswith(f"[{kind}_") for t in self.v["real"]) + 1
         token = f"[{kind}_{n}]"
-        self.v["ids"][value.lower()] = token
-        self.v["real"][token] = value
-        if kind == "ADDRESS":                                  # "41 Larkspur Mews" and "Oakhollow" alone too
-            for part in value.split(","):
-                if len(part.strip()) >= 3:
-                    self.v["ids"].setdefault(part.strip().lower(), token)
-        if kind == "PERSON":                                   # "Alice" and "Nguyen" alone name her too
-            for part in value.split():
-                if len(part) >= 3 and part[0].isupper():
-                    self.v["ids"].setdefault(part.lower(), token)
+        self.v["real"][token], self.v["scope"][token] = real, sorted(scopes)
+        return token
 
-    def learn(self, name, text, find=None):
-        """Record every identifier in one private file: patterns, identifier columns of a CSV, and what
+    def _tag(self, token, scopes):
+        self.v["scope"][token] = sorted(set(self.v["scope"].get(token, [])) | set(scopes))
+
+    def add(self, value, kind, scopes):
+        value = flat(norm(value)).strip(".'\"")
+        check = PATTERNS.get(kind, (None, None))[1]
+        if len(value) < 2 or TOKEN.fullmatch(value) or (check and not check(value)) \
+                or (kind == "ID" and value.isdigit() and len(value) < 5):   # short numbers are not identifiers
+            return
+        whole = kind != "PERSON" or " " in value                       # one-word names live in "parts"
+        if whole:
+            token = self.v["ids"].get(value.lower()) or self._new(value, kind, scopes)
+            self.v["ids"][value.lower()] = token
+            self._tag(token, scopes)
+        if kind == "ADDRESS":                                          # "41 Larkspur Mews" and "Oakhollow" too
+            for part in re.split(r"\s*,\s*", value):
+                if len(part) >= 3:
+                    self.v["ids"].setdefault(part.lower(), token)
+        if kind == "PERSON":                                           # "Alice" or "Nguyen" alone name her too
+            for part in {p for sep in (r"[\s,]+", r"[\s,-]+") for p in re.split(sep, value)}:
+                part = part.strip(".'\"")
+                if len(part) < 2 or not part[0].isupper() or part == value and whole:
+                    continue
+                have = self.v["parts"].get(part)
+                if have is None:
+                    self.v["parts"][part] = token if whole else self._new(part, kind, scopes)
+                elif whole and have != token and self.v["real"].get(have) != part:
+                    self.v["parts"][part] = self._new(part, kind, scopes)  # two people share it: its own token
+                self._tag(self.v["parts"][part], scopes)
+
+    def find_in(self, text, scopes):
+        for kind, (p, check) in PATTERNS.items():
+            for m in re.finditer(p, text):
+                self.add(m.group(1) if m.lastindex else m.group(0), kind, scopes)
+
+    def learn(self, name, data, scopes, find=None):
+        """Record every identifier in one private file: patterns, identifier columns of a table, and what
         `find(text)` (a local model trusted with the file) lists as people, addresses and other ids."""
-        for kind, p in PATTERNS.items():
-            for m in re.findall(p, text):
-                self.add(m, kind)
-        try:
-            rows = list(csv.reader(io.StringIO(text)))
-        except csv.Error:
-            rows = []
-        if len(rows) > 1 and len(rows[0]) > 1:
-            for c, head in enumerate(rows[0]):
-                kind = next((k for k, p in COLUMNS if re.search(p, head.strip().lower())), None)
+        text = norm(data.decode(errors="replace") if isinstance(data, bytes) else data)
+        self.find_in(text, scopes)
+        ext = name.rsplit(".", 1)[-1].lower()
+        if ext in ("csv", "tsv"):
+            try:
+                delim = "\t" if ext == "tsv" else csv.Sniffer().sniff(text[:4096], ",;\t|").delimiter
+            except csv.Error:
+                delim = ","
+            rows = list(csv.reader(io.StringIO(text), delimiter=delim))
+            for c, head in enumerate(rows[0] if rows else []):
+                head = re.sub(r"[_.\-]+", " ", head.strip().lower())
+                kind = next((k for k, p in COLUMNS if re.search(p, head)), None)
                 for r in rows[1:] if kind else []:
                     if c < len(r) and r[c].strip():
-                        self.add(r[c], kind)
+                        self.add(r[c], kind, scopes)
+        low = flat(text).lower()
         for kind, value in (find(text) if find else []):
-            if value.lower() in text.lower():                 # only what is really in the file
-                self.add(value, kind)
-        self.v["files"].append(name)
+            if flat(norm(value)).lower() in low:                  # only what is really in the file
+                self.add(value, kind, scopes)
+        self.v["files"][name] = hashlib.sha256(text.encode()).hexdigest()
         self.save()
 
-    def known(self, name):
-        return name in self.v["files"]
+    def known(self, name, data):
+        text = norm(data.decode(errors="replace") if isinstance(data, bytes) else data)
+        return self.v["files"].get(name) == hashlib.sha256(text.encode()).hexdigest()
 
-    def scrub(self, text):
-        for kind, p in PATTERNS.items():                       # identifiers the files did not hold
-            for m in re.findall(p, text):
-                if m.lower() not in self.v["ids"]:
-                    self.add(m, kind)
-                    self.save()
-        if not self.v["ids"]:
-            return text
-        if not getattr(self, "_re", None):
-            keys = sorted(self.v["ids"], key=len, reverse=True)
-            self._re = re.compile(r"(?<!\w)(?:" + "|".join(map(re.escape, keys)) + r")(?!\w)", re.I)
-        return self._re.sub(lambda m: self.v["ids"][m.group(0).lower()], text)
+    def _pattern(self):
+        if self._re is None:
+            alt = lambda keys: "|".join(re.escape(k).replace(r"\ ", r"\s+") for k in sorted(keys, key=len, reverse=True))  # noqa: E731
+            forms = {}
+            for p, t in self.v["parts"].items():
+                for f in {p, p.upper(), p.title()} | ({p.lower()} if p.lower() not in COMMON else set()):
+                    forms.setdefault(f, t)
+            self.forms = forms
+            b, e = r"(?<![A-Za-z0-9])", r"(s?)(?![A-Za-z0-9])"     # '_' and '.' separate words; plurals too
+            self._re = [re.compile(b + "(" + alt(ks) + ")" + e, fl) for ks, fl in
+                        ((self.v["ids"], re.I), (forms, 0)) if ks]
+        return self._re
 
-    def unscrub(self, text):
-        return TOKEN.sub(lambda m: self.v["real"].get(m.group(0), m.group(0)), text)
+    def scrub(self, text, scopes):
+        """The text with every known identifier replaced. Identifiers the files did not hold are found by
+        pattern and learned on the spot, tagged with the scopes of the text."""
+        text = norm(text)
+        n = len(self.v["ids"]) + len(self.v["parts"])
+        self.find_in(text, scopes)
+        if len(self.v["ids"]) + len(self.v["parts"]) != n:
+            self.save()
+        for i, r in enumerate(self._pattern()):
+            look = self.v["ids"] if i == 0 else self.forms
+            text = r.sub(lambda m: (look[flat(m.group(1)).lower()] if i == 0 else look[m.group(1)]) + m.group(2), text)
+        return text
+
+    def scrub_name(self, name, scopes):
+        """A file name, piece by piece: `alice_nguyen-review.md` -> `[PERSON_1]_[PERSON_1]-review.md`."""
+        self._pattern()
+        lower = {k.lower(): t for k, t in self.forms.items()}
+        return re.sub(r"[A-Za-z0-9@+]+", lambda m: self.v["ids"].get(m.group(0).lower()) or lower.get(m.group(0).lower())
+                      or self.scrub(m.group(0), scopes), name)
+
+    def unscrub(self, text, allowed):
+        """Placeholders back to real values, only those whose every scope is in `allowed`."""
+        return TOKEN.sub(lambda m: self.v["real"][m.group(0)] if m.group(0) in self.v["real"]
+                         and set(self.v["scope"].get(m.group(0), ["?"])) <= set(allowed) else m.group(0), text)

@@ -14,7 +14,7 @@ import transport  # noqa: E402
 GOT = []                                                       # (node, what the model was given)
 
 
-def fake_job(node, files, task, returns, out, keep, timeout, salt=None):
+def fake_job(node, files, task, returns, out, keep, timeout, salt=None):     # the files are staged on this host
     seen = task + "".join(Path(f).read_text() for f in files)
     GOT.append((node["model"]["model"], seen))
     reply = json.dumps({"answer": True}) if returns else "echo: " + seen
@@ -47,7 +47,7 @@ def test_forward_cloud_in_front():
     with tempfile.TemporaryDirectory() as tmp:
         t, p = setup(os.path.realpath(tmp))
         d = door.Door(p, t / "state", "cloud")
-        d.prepare()
+        d.prepare(lambda scope: lambda text: [])
         r = d.read(str(t / "hr/people.csv"))
         assert r["row"] == "scrubbed" and not leaked(r["text"]) and "162000" in r["text"], r
         assert "refused" in d.rpc({"method": "tools/call", "id": 1, "params": {"name": "read", "arguments": {
@@ -70,7 +70,7 @@ def test_reverse_local_in_front():
     with tempfile.TemporaryDirectory() as tmp:
         t, p = setup(os.path.realpath(tmp))
         d = door.Door(p, t / "state", "pop")
-        d.prepare()
+        d.prepare(lambda scope: lambda text: [])
         assert d.offload("hello", [], node="cloud")["row"] == "full"        # nothing read yet: plain text
         r = d.read(str(t / "hr/people.csv"))
         assert r["row"] == "full" and "Zorbina Quellwater" in r["text"]
@@ -96,7 +96,50 @@ def test_levels():
             pass
 
 
+def refusal(d, tool, **args):
+    return d.rpc({"method": "tools/call", "id": 9, "params": {"name": tool, "arguments": args}})["result"]["content"][0]["text"]
+
+
+def test_found_leaks_stay_fixed():
+    """Each case is a leak the review found: it must stay closed."""
+    import lego
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        d = door.Door(p, t / "state", "cloud")
+        d.prepare(lambda scope: lambda text: [])
+        d.read(str(t / "hr/people.csv"))
+        for probe in ("/[PERSON_1]", "[PERSON_2]:/x", "[EMAIL_1]"):          # refusals never unscrub
+            assert not leaked(refusal(d, "read", path=probe)), probe
+        (t / "ws/a.txt").write_text("harmless")                              # swap a labelled file for a link
+        it = d.item("a.txt")
+        os.remove(t / "ws/a.txt")
+        os.symlink(t / "keys/prod.env", t / "ws/a.txt")
+        try:
+            d.bytes_of(it, False)
+            raise AssertionError("read through a swapped link")
+        except (door.core.Refused, OSError):
+            pass
+        assert d.vault.unscrub("[PERSON_1]", set()) == "[PERSON_1]"            # no scope, no real name
+        for ws in (t / "hr", t / "state", t):                                 # the room may not reach private data
+            try:
+                door.Door({**p, "workspace": str(ws)}, t / "state", "cloud")
+                raise AssertionError(f"workspace {ws} accepted")
+            except door.core.Refused:
+                pass
+        rev = door.Door(p, t / "state", "pop")                                # reverse: read raw, write to ws
+        rev.read(str(t / "hr/people.csv"))
+        later = door.Door(p, t / "state", "cloud")                            # a later session on that workspace
+        assert not later.context <= later.seen                               # lego.session refuses to start it
+        (t / "ws2").mkdir()
+        fresh = door.Door({**p, "workspace": str(t / "ws2")}, t / "state2", "pop")
+        fresh.prepare(lambda scope: lambda text: [])
+        GOT.clear()
+        fresh.offload("Write to Zorbina Quellwater", [], node="cloud")        # names typed from the listing
+        assert not leaked(GOT[-1][1]), GOT[-1]
+        assert lego.caller(p, "codex") is None and lego.caller(p, "claude") == "cloud"
+
+
 if __name__ == "__main__":
-    for f in (test_levels, test_forward_cloud_in_front, test_reverse_local_in_front):
+    for f in (test_levels, test_forward_cloud_in_front, test_reverse_local_in_front, test_found_leaks_stay_fixed):
         f()
         print("ok  ", f.__name__)

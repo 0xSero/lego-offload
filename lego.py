@@ -2,6 +2,7 @@
 
 usage: lego [--policy FILE] AGENT [agent args...]   AGENT: claude | codex | cursor | cline | omp
        lego [--policy FILE] reset                  refill every scope's allowance
+       lego [--policy FILE] reset --workspace      forget what earlier sessions put in the workspace
        lego [--policy FILE] app [PORT]             the web app (default port 8470)
        lego app --demo [PORT]                      the web app on synthetic data (gpu-box)
 
@@ -34,23 +35,24 @@ import transport
 
 
 def caller(policy, agent):
-    """The node whose model the agent talks to: a local model for omp, else the cloud model (if listed)."""
-    local = agents.AGENTS[agent][1] is None
+    """The node whose model the agent talks to: a local model for omp, else the node with the agent's own api."""
+    up = agents.AGENTS[agent][1]
     for n, v in policy["nodes"].items():
         m = v.get("model") or {}
-        if (local and m.get("url")) or (not local and (m.get("api") == agents.AGENTS[agent][1] or n == "cloud")):
+        if (m.get("url") if up is None else m.get("api") == up):
             return n
-    if local:
+    if up is None:
         raise SystemExit(f"lego: {agent} needs a model with a \"url\" in the policy")
     return None
 
 
 def finder(policy):
-    """For the vault: a local model trusted with everything lists the identifiers in a private file."""
-    for v in policy["nodes"].values():
-        if (v.get("model") or {}).get("url") and set(policy["scopes"].values()) <= set(v["trust"]):
-            return lambda text: transport.find_ids(v, text)
-    return None
+    """For the vault: scope -> a function listing a file's identifiers, run by a local model that sees the scope raw."""
+    def find(scope):
+        for v in policy["nodes"].values():
+            if (v.get("model") or {}).get("url") and scope in v["trust"]:
+                return lambda text: transport.find_ids(v, text)
+    return find
 
 
 def session(policy, state, agent, args, capture=None, timeout=None, tty=False):
@@ -66,7 +68,10 @@ def session(policy, state, agent, args, capture=None, timeout=None, tty=False):
     except BlockingIOError:
         raise SystemExit("lego: another session is using this policy's nodes; run one at a time")
     d = door.Door(policy, state, me)
-    d.prepare(finder(policy))
+    if not d.context <= d.seen:
+        raise SystemExit(f"lego: the workspace holds {sorted(d.context - d.seen)} data from an earlier session, which "
+                         f"{agent}'s model may not see. Use another workspace, or clear it and run: lego reset --workspace")
+    d.prepare(finder(policy), strict=True)
     ds, rs = door.serve(d, 0), route.serve(0, upstream, capture=capture)
     dp, rp = ds.server_address[1], rs.server_address[1]
     home = tempfile.mkdtemp(prefix="lego-home-")
@@ -106,7 +111,12 @@ def main(argv):
     policy.setdefault("workspace", os.getcwd())
     cmd, args = argv[0], argv[1:]
     if cmd == "reset":
-        return door.Door(policy, state).reset()
+        d = door.Door(policy, state)
+        if args == ["--workspace"]:                            # you vouch that it holds no private data now
+            t = d._taints()
+            t.pop(d.ws, None)
+            return d.taint_file.write_text(json.dumps(t))
+        return d.reset()
     if cmd == "app":
         import app
         return app.main(policy, state, int(args[0]) if args else 8470)

@@ -36,7 +36,5 @@ def launch(agent, args, ws, home, route_port, door_port, env=(), timeout=900, ag
          "SHELL": "/bin/bash", "TRACK_EXEMPT": "1", **dict(env)}
     sb = ["/usr/bin/sandbox-exec", "-f", str(PROFILE), "-D", f"WS={ws}", "-D", f"HOME_DIR={home}",
           "-D", f"AGENT_DIR={agent_dir}", "-D", f"LIB_DIR={lib_dir}", "-D", f"ROUTE_PORT={route_port}", "-D", f"DOOR_PORT={door_port}"]
-    if tty:
-        return subprocess.run(sb + [agent, *args], cwd=ws, env=e, timeout=timeout)
-    return subprocess.run(sb + [agent, *args], cwd=ws, env=e, capture_output=True, text=True,
-                          timeout=timeout, stdin=subprocess.DEVNULL)
+    pipes = {} if tty else {"capture_output": True, "text": True, "stdin": subprocess.DEVNULL}
+    return subprocess.run(sb + [agent, *args], cwd=ws, env=e, timeout=timeout, **pipes)

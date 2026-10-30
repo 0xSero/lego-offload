@@ -82,12 +82,10 @@ def readable(raw, enc=""):
 
 def serve(port, upstream="anthropic", capture=None):
     """`upstream`: a name in UPSTREAMS, or the http:// URL of a local model (no credential)."""
-    if upstream.startswith("http://"):
-        host, prefixes, secret, beta = upstream[7:].split("/")[0], ("/",), dict, None
-    else:
-        host, prefixes, secret, beta = UPSTREAMS[upstream]
-    conn_for = (lambda: http.client.HTTPConnection(host, timeout=600)) if upstream.startswith("http://") else \
-        (lambda: http.client.HTTPSConnection(host, 443, timeout=600))
+    local = upstream.startswith("http://")
+    host, prefixes, secret, beta = (upstream[7:].split("/")[0], ("/",), dict, None) if local else UPSTREAMS[upstream]
+    conn_for = lambda: (http.client.HTTPConnection(host, timeout=600) if local else                # noqa: E731
+                        http.client.HTTPSConnection(host, 443, timeout=600))
     cache, lock = {}, threading.Lock()
 
     def creds():

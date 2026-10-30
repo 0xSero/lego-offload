@@ -88,11 +88,11 @@ def python(case, state):
         except core.Refused:
             out.append(line("refused", [], 0, json.loads(d.ledger_file.read_text()), d.slots.get(name, (0, frozenset()))))
             continue
-        o, row, led, timeout, start = d.decide(name, items, returns, t)
+        o, row, led, start, end = d.decide(name, items, returns, t)
         d.refs[o.ref] = o.scopes
         refs.append(o.ref)
         if row == "full":
-            d.slots[name] = (start + min(dur, timeout), frozenset())
+            d.slots[name] = (min(start + dur, end), frozenset())
         out.append(line(row, d.hidden(o.scopes), core.bits(returns) if row == "shaped" else 0, led, d.slots[name]))
     return out
 

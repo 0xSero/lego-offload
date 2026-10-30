@@ -27,7 +27,8 @@ def fake_job(node, files, task, returns, out, keep, timeout, salt):
 
 
 transport.run_job = fake_job
-transport.copy = lambda src, path, dst, stage: f"{stage}/{Path(path).name}"
+transport.put = lambda node, stage, name, data, timeout=60: f"{stage}/{name}"
+door.Door.bytes_of = lambda self, item, scrubbed, timeout=60: b""
 
 
 def trial(private_len):

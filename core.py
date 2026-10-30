@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 SEALED = "sealed"          # scope of every path nobody listed; no allowance, ever
 UNKNOWN = "UNKNOWN"        # the one value a shaped reply takes when anything goes wrong
+KINDS = ("bool", "enum", "int", "tuple")
 MAX_BITS = 16              # widest single answer (red team: one 63-bit int carried 3 facts)
 
 
@@ -108,8 +109,9 @@ def salt(key, scopes):
 
 def size(schema, depth=0):
     """Number of answers a schema allows. Anything that is not exactly one of the four forms is refused."""
-    if not isinstance(schema, dict) or len(schema) != 1 or depth > 4:
-        raise Refused("schema must be one of bool, enum, int or tuple")
+    if not isinstance(schema, dict) or len(schema) != 1 or depth > 4 or next(iter(schema)) not in KINDS:
+        raise Refused('returns must be one of {"bool": true}, {"enum": ["a", "b"]}, {"int": [0, 10]} or '
+                      '{"tuple": [{"bool": true}, {"int": [0, 3]}]}')
     (kind, arg), = schema.items()
     if kind == "bool" and arg is True:
         return 2
@@ -120,8 +122,7 @@ def size(schema, depth=0):
         return arg[1] - arg[0] + 1
     if kind == "tuple" and isinstance(arg, list) and arg:
         return math.prod(size(s, depth + 1) for s in arg)
-    raise Refused(f"bad {kind} schema" if kind in ("bool", "enum", "int", "tuple") else
-                  "schema must be one of bool, enum, int or tuple")
+    raise Refused(f"bad {kind} schema")
 
 
 def bits(schema):
