@@ -611,6 +611,22 @@ def test_sixteenth_hunt_stays_fixed():
             j.join()
 
 
+def test_own_precision():
+    """Caller text: everyday and technical words stay as written; names, in any of the forms the hunts used, do not."""
+    import scrub
+    v = scrub.Vault(tempfile.mkdtemp() + "/v.json")
+    text = ("What is the average salary in the CSV? Offload the env file from the workspace and check the stdout. "
+            "Mail Zorbina about quellwater, and tell Will, May and frank that Strand left. Grace Friday, January Jones "
+            "and Mary I. Baker agree; ask knapper and barrio and judge and lord and shadow, and sk and pk.")
+    out = v.own(scrub.norm(text), {}, {"hr"})
+    words = set(re.findall(r"[\w']+", out))
+    for keep in ("the", "average", "salary", "env", "workspace", "stdout"):
+        assert keep in words, (keep, out)
+    for name in ("Zorbina", "quellwater", "Will", "May", "frank", "Strand", "Grace", "Friday", "January", "Jones",
+                 "Mary", "Baker", "knapper", "barrio", "judge", "lord", "shadow", "sk", "pk"):
+        assert name not in words, (name, out)
+
+
 def tmp_out():
     return tempfile.mkdtemp() + "/out.txt"
 

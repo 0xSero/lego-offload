@@ -451,7 +451,7 @@ TECH = set("""offload offloads offloaded offloading workspace workspaces env env
 repos eval evals plaintext filename filenames handoff stdout stderr stdin regex regexes jsonl yaml toml enum enums int ints
 str dict dicts tuple tuples args kwargs params username usernames timestamp timestamps endpoint endpoints backend frontend
 metadata codebase async localhost subfolder subfolders subdirectory subdirectories readme byte bytes numeric unparseable
-parseable mcp sk pk rk utf ascii uuid ssn ssns pii http https auth init dev prod staging cron npm pip git diff diffs bool
+parseable mcp utf ascii uuid ssn ssns pii http https auth init dev prod staging cron npm pip git diff diffs bool
 booleans boolean webhook webhooks lookup lookups untrusted unredacted redacted redaction pseudonymised pseudonymized
 placeholder placeholders canary canaries refactor refactored rerun reruns runtime lego classify newline newlines
 hyperlink""".split())   # lowercase technical words, for caller text only (own); FIRST still wins
@@ -471,8 +471,8 @@ thanks thank hi hello dear regards best ok okay done good great yes sure result 
 try:                                                            # first names, from a fixed list: never the vault
     FIRST = {w.strip().lower() for w in open("/usr/share/dict/propernames")} - {
         "will", "mark", "art", "bill", "guy", "ray", "joy", "hope", "case", "page", "lane", "rich", "sky", "major"} - set(
-        """the no real think those trying part list old plastic space sanity tolerant rodent shadow stagger shatter
-        panacea pilot root judge rogue sergeant sir lord vice liber knapper barrio""".split())   # macOS's list: not names
+        """the no real think those trying part list old plastic space sanity tolerant rodent stagger shatter
+        panacea""".split())   # macOS's list: not names
 except OSError:
     FIRST = set()
 
