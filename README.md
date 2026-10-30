@@ -26,29 +26,24 @@ One exchange rule covers every byte that moves between models, in either directi
 The design is proved in Lean with no size bound: for any policy, any adaptive strategy and any number of calls, the agent learns at most its allowance in bits, counting answers, reply times, the node's queue and its prompt cache. The Lean model is run against the real door to check they decide alike. A Bend simulation estimates how useful the system is, and every agent is tested end to end with real models on synthetic private data.
 
 ```
- Mac (host, trusted with every scope)
- ┌──────────────────────────────────────────────────────────────────────┐
- │  room: sandbox-exec, deny by default                                 │
- │  ┌────────────────────────────────────────────────────────────┐      │
- │  │  claude | codex | cursor | cline   workspace/ (public only) │      │
- │  │  throwaway HOME: placeholders, no credentials               │      │
- │  └───────┬───────────────────────────────┬────────────────────┘      │
- │          │ model calls                   │ offload(task, inputs,     │
- │          ▼                               ▼         returns)  (MCP)   │
- │   route (free port)                door (free port)                  │
- │   swaps in the real credential,    core.py decides:                  │
- │   captures every exchange          label→queue→charge→move→run       │
- │          │                         reply: full | shaped | receipt    │
- └──────────┼───────────────────────────────┼───────────────────────────┘
-            ▼                               │ ssh: only where policy allows
-   api.anthropic.com · chatgpt.com          ▼
-   api2.cursor.sh · openrouter.ai    gpu-box (trusted with hr, acme)
-   (trusted with nothing)            ┌───────────────────────────────────┐
-                                     │ /data/hr  /data/acme              │
-                                     │ local model (DeepSeek): private   │
-                                     │ work; prompt cache salted by      │
-                                     │ scope; outputs and traces stay    │
-                                     └───────────────────────────────────┘
+ Mac (host: holds the raw files and the vault, trusted with every scope)
+ ┌──────────────────────────────────────────────────────────────────────────┐
+ │  room: sandbox-exec, deny by default                                     │
+ │  ┌──────────────────────────────────────────────────────────────┐        │
+ │  │ claude | codex | cursor | cline | omp     workspace/          │        │
+ │  │ throwaway HOME: placeholders, no credentials, no private dirs │        │
+ │  └──────┬─────────────────────────────────┬─────────────────────┘        │
+ │         │ model calls                     │ read(path) · offload(task,    │
+ │         ▼                                 ▼   inputs, returns)  (MCP)    │
+ │  route (free port)                  door (free port)                     │
+ │  swaps in the real credential,      give(item, model): raw | scrubbed |  │
+ │  captures every exchange            no; bricks: label→queue→charge→      │
+ │         │                           move→run; reply full|shaped|receipt  │
+ └─────────┼─────────────────────────────────┼──────────────────────────────┘
+           ▼                                 ▼
+  the agent's own model:             the other models, each given only its level
+  cloud (claude, codex, …)           gpu-box: DeepSeek, sees everything (ssh)
+  or local (omp → gpu-box)            cloud:  Claude, sees hr scrubbed, keys nothing
 ```
 
 ## Install
@@ -182,17 +177,18 @@ The reply row is chosen from labels, the ledger and the node's queue alone, befo
 
 | File | Lines | What |
 |-|-|-|
-| `core.py` | 193 | The seven bricks and the cache salt. Pure: no I/O, no clock, no network |
-| `door.py` | 217 | The `offload` tool, served as MCP over HTTP on localhost. Asks `core.py` at every step |
-| `transport.py` | 84 | Carries out moves and runs over ssh. Calls the node's model with constrained JSON decoding and the scope's cache salt |
-| `route.py` | 173 | Localhost proxy to each agent's cloud. Strips the room's placeholder, injects the real credential, captures every exchange decompressed |
-| `room.py` + `room/room.sb` | 40 + 108 | The sandbox. Deny by default: the workspace, a throwaway HOME, the agent's install directory, and the two ports |
-| `agents.py` | 104 | One adapter per agent: config pointing the model at the route and tools at the door |
-| `lego.py` + `lego` | 93 + 3 | The CLI. One session at a time per policy, so the door's queue sees every job |
-| **implementation** | **1,015** | app, tests and verification excluded |
+| `core.py` | 200 | The seven bricks, the cache salt and the scrubbed twin of a scope. Pure: no I/O, no clock, no network |
+| `door.py` | 375 | The simple policy, the exchange rule, and the `read` and `offload` tools, served as MCP over HTTP on localhost. Asks `core.py` at every step |
+| `scrub.py` | 94 | The vault: identifiers learned from the private files, stable placeholders, and back again |
+| `transport.py` | 153 | Carries out moves and runs over ssh, or calls a cloud model with the user's login. Constrained JSON decoding and the scope's cache salt |
+| `route.py` | 179 | Localhost proxy to the agent's model. Strips the room's placeholder, injects the real credential, captures every exchange decompressed |
+| `room.py` + `room/room.sb` | 42 + 110 | The sandbox. Deny by default: the workspace, a throwaway HOME, the agent's install directory, and the two ports |
+| `agents.py` | 127 | One adapter per agent: config pointing the model at the route and tools at the door |
+| `lego.py` + `lego` | 123 + 3 | The CLI. Picks the agent's own model, fills the vault, one session at a time per policy |
+| **implementation** | **1,406** | app, tests and verification excluded |
 | `app.py` + `app.html` | 157 + 141 | `lego app`: a local page to run tasks and watch the door |
 | `verify/` | | `Lego.lean` (the proof), `twin.py` (Lean vs the door), `sim.bend` + `sim_ref.py` (the simulation). See [`verify/README.md`](verify/README.md) |
-| `tests/` | | `test_core.py`, `test_queue.py`, `test_room.py`, `test_agents.py`, `e2e.py`, `contention.py`, `traces.py`, `report.py` |
+| `tests/` | | `test_core.py`, `test_queue.py`, `test_exchange.py`, `test_room.py`, `test_agents.py`, `e2e.py`, `twoway.py`, `contention.py`, `traces.py`, `report.py` |
 | `results/` | | Output of the last `./run`: `REPORT.md`, the data behind it, and the e2e traces |
 
 ## Results
@@ -236,6 +232,9 @@ All numbers come from the last `./run`. [`results/REPORT.md`](results/REPORT.md)
 - name its way around the labels: unlisted paths are sealed, and policies with a public path inside a scope are refused.
 
 **Not covered:**
+
+- **Scrubbed means de-identified, not secret.** A model that sees a scope scrubbed gets every number, date and sentence in it; only identifiers become placeholders. The vault finds them by pattern, by CSV column and by asking a local model, so an identifier none of the three catches (an unusual nickname, a name spelled out letter by letter) crosses as written. The proof's bound is about what lies beyond the scrubbed view, so it says nothing about how good the scrubber is. The canary runs below measure that.
+- **Local agent in front: it is trusted, the cloud is not.** With `lego omp`, what crosses to the cloud is what your local agent chooses to write, scrubbed. Every known identifier is replaced, but the agent decides what to say about the data. The cloud's replies are untrusted text that the local agent reads, so a cloud reply could try to talk it into sending more (prompt injection). The level still holds: nothing from a scope the cloud sees as `nothing` crosses once the agent has read it, because its context then carries that scope.
 
 - **Bits are bits.** 16 bits about hr is enough for one exact salary if the agent asks `int[100000, 150000]`. The allowance bounds how much is learnt, not which facts, so size each scope's allowance with that in mind.
 - **The host is trusted.** All bytes between nodes pass through the Mac, and policy requires the Mac to be trusted with every scope.

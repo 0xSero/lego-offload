@@ -116,7 +116,7 @@ def answer(output):
     """Pull the typed answer out of a constrained JSON reply (anything odd -> None)."""
     try:
         return json.loads(output.strip().removeprefix("```json").removesuffix("```"))["answer"]
-    except (ValueError, TypeError, KeyError):
+    except (ValueError, TypeError, KeyError, AttributeError):
         return None
 
 

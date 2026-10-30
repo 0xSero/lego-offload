@@ -173,7 +173,8 @@ class Door:
             if self.p["nodes"].get(n, {}).get("model") and all(self.give(i, n) for i in items):
                 return n
         need = frozenset().union(*(i.scopes for i in items))
-        raise core.Refused(f"no model may be given {sorted(need)}")
+        held = " (your own context holds what you were given, and it goes with every task)" if self.context else ""
+        raise core.Refused(f"no model may be given {sorted(need)}{held}")
 
     def decide(self, n, items, returns, t):
         """Everything about a call, from labels, the ledger and node n's queue at time t, before any
@@ -244,6 +245,7 @@ class Door:
         time.sleep(max(0.0, t0 + deadline - time.time()))       # the reply time never depends on the job
         value = core.clock(core.shape(transport.answer(result.get("output")), returns),
                            0 if not job.is_alive() else deadline + 1, deadline)
+        self._note(op="answer", ref=out.ref, answer=value)
         return {"row": "shaped", "answer": value, "ref": out.ref, "allowance_left": ledger}
 
     def _run(self, n, given, moved, task, returns, out, row, timeout, turn):
