@@ -111,11 +111,12 @@ class Door:
         self.ws = canon(policy.get("workspace") or "/nonexistent")
         self.taint_file = Path(os.environ.get("LEGO_TAINT", "~/.lego/taint.json")).expanduser()  # per workspace,
         self.taint_file.parent.mkdir(parents=True, exist_ok=True)                            # every policy
-        mine = [str(self.state.resolve()), str(self.taint_file.parent), str(Path("~/.lego").expanduser())] + [d.partition(":")[2] for d in self.scopes if d.startswith(self.host + ":")] + [
+        if any(inside(canon(d), self.ws) for d in (self.taint_file.parent, Path("~/.lego").expanduser())):
+            raise core.Refused("the workspace holds lego's taints and locks: the room could rewrite them")
+        mine = [str(self.state.resolve())] + [d.partition(":")[2] for d in self.scopes if d.startswith(self.host + ":")] + [
             v[k] for v in policy["nodes"].values() if not v.get("ssh") for k in ("out", "stage") if k in v]
         if any(inside(self.ws, canon(d)) or inside(canon(d), self.ws) for d in mine):
-            raise core.Refused("the workspace overlaps a private directory or lego's own state: the room could "
-                               "read or rewrite it")
+            raise core.Refused("the workspace overlaps a private directory or lego's own state: the room could read it")
         self.caller = caller                                    # the agent's own model
         self.me = self.nodes[caller] if caller else core.Node("", frozenset())
         self.seen = self.me.trust
