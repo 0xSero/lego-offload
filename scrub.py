@@ -461,7 +461,9 @@ thanks thank hi hello dear regards best ok okay done good great yes sure result 
 
 try:                                                            # first names, from a fixed list: never the vault
     FIRST = {w.strip().lower() for w in open("/usr/share/dict/propernames")} - {
-        "will", "mark", "art", "bill", "guy", "ray", "joy", "hope", "case", "page", "lane", "rich", "sky", "major"}
+        "will", "mark", "art", "bill", "guy", "ray", "joy", "hope", "case", "page", "lane", "rich", "sky", "major"} - set(
+        """the no real think those trying part list old plastic space sanity tolerant rodent shadow stagger shatter
+        panacea pilot root judge rogue sergeant sir lord vice liber knapper barrio""".split())   # macOS's list: not names
 except OSError:
     FIRST = set()
 
