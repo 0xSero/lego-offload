@@ -348,16 +348,12 @@ class Vault:
         if not inner and not short:
             return text
 
-        def hump(w):                                           # MeiNg: short names as whole humps
-            if short.get(fold(w)):
-                return short[fold(w)]
-            return inner.sub(lambda h: folded[h.group(0)], fold(w)) if inner and inner.search(fold(w)) else w
+        def parts(w):                                          # zorbinaQuellwater2, quillonbrimstoke, Jose for José, zOrBiNa
+            return inner.sub(lambda h: folded[h.group(0)], fold(w)) if inner and inner.search(fold(w)) else None
 
-        def run(m):                                            # zorbinaQuellwater2, quillonbrimstoke, Jose for José,
-            w = m.group(0)                                     # zOrBiNa
-            if inner and inner.search(fold(w)):
-                return inner.sub(lambda h: folded[h.group(0)], fold(w))
-            return "".join(hump(w) for w in re.split(r"(?<=[a-z])(?=[A-Z])", w))
+        def run(m):                                            # MeiNg: short names as whole humps
+            return parts(m.group(0)) or "".join(short.get(fold(w)) or parts(w) or w
+                                                for w in re.split(r"(?<=[a-z])(?=[A-Z])", m.group(0)))
         return self._out(text, lambda seg: re.sub(r"[^\W\d_]+", run, seg), keep)
 
     def own(self, text, fresh, scopes=()):
