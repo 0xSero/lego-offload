@@ -2,7 +2,8 @@
 offload tool) from a throwaway HOME. No credential is written here: the route strips what
 the agent sends and injects the real one, so the room only ever holds placeholders.
 
-Each adapter takes (home, route_url, door_url, args) and returns (argv, install_dir, env).
+Each adapter takes (home, route_url, door_url, args, ws), omp also a model, and returns
+(argv, install_dir, env).
 """
 import base64
 import json

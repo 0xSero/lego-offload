@@ -64,7 +64,7 @@ COLUMNS = [("EMAIL", r"e ?mail"), ("PHONE", r"phone|mobile|\btel\b|telefon|cell"
            ("PERSON", r"^(?:full |first |last |given |middle |preferred |legal |sur|fore|employee |contact |manager "
                       r"|patient |client |customer |member )?name$|^(?:manager|employee|patient|client|customer|contact"
                       r"|owner|author|recipient|sender|person|holder|user)$")]
-# first names that are also everyday words: matched only as capitalised or upper case
+# first names that are also everyday words: kept out of folded and short-name matching and of email-local ids
 COMMON = set("will mark may june april august grace hope faith joy rose pat bill rob sue art guy ray dawn summer frank "
              "long young little black white brown green king bell hill wood page lane gray grey rich chase hunter "
              "major price love case cash ward stone field park banks miles holly ivy jack sky".split())
@@ -112,7 +112,8 @@ def fold(s):
 
 
 class Unscrubbable(ValueError):
-    """Known identifiers remain once the text is decoded (entities, %XX, \\uXXXX, quoted-printable)."""
+    """Known identifiers remain once the text is decoded (entities, %XX, \\uXXXX, quoted-printable, MIME
+    header words, RTF \\'xx and \\uN, \\x escapes, short base64)."""
 
 
 def decoded(text):
