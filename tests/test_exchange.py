@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ["LEGO_TAINT"] = tempfile.mkdtemp() + "/taint.json"           # not the user's
 import door  # noqa: E402
-door.same_disk = lambda a, b: False                          # stub nodes: no real disk to measure
+door.measured = lambda node: False                          # stub nodes: no real disk to measure
 import transport  # noqa: E402
 import core  # noqa: E402
 
@@ -240,14 +240,14 @@ def test_fifth_hunt_stays_fixed():
         v = rev.vault                                                         # re-tagging refreshes the matcher
         v.scrub("warm the hr matcher", {"hr"})
         assert "ops@corp" not in v.scrub("mail ops@corp.example", {"hr"})
-        try:                                                                  # a local node on the room's disk
-            door.same_disk = lambda a, b: True
+        try:                                                                  # a local node: df would show its jobs
+            door.measured = lambda node: True
             door.Door(p, t / "s5", "cloud")
             raise AssertionError("a local node on the workspace disk was accepted")
         except door.core.Refused:
             pass
         finally:
-            door.same_disk = lambda a, b: False
+            door.measured = lambda node: False
 
     class Stall(http.server.BaseHTTPRequestHandler):                          # a model that never answers
         def do_POST(self):
@@ -571,8 +571,9 @@ def test_fifteenth_hunt_stays_fixed():
         for f in ("page.html", "log.txt"):                                     # encoded names: refused, not sent
             assert "encoded" in refusal(cloud, "read", path=str(t / f"hr/{f}")), f
         assert "0134" not in cloud.read(str(t / "hr/calls.md"))["text"]        # with its country code
-        os.symlink(f"{t}/keys/./out.env", t / "ws2/dot")
-        assert "plain paths" in refusal(cloud, "read", path="dot")             # decided from the name
+        for f in ("out.env", "prod.env", "nope.env"):
+            os.symlink(f"{t}/keys/./{f}", t / f"ws2/dot-{f}")
+        assert len({refusal(cloud, "read", path=f"dot-{f}") for f in ("out.env", "prod.env", "nope.env")}) == 1   # by name
         ns = {}                                                               # the node's runner skips links
         exec(transport.OPEN, ns)
         walk = lambda p: [f for f, _ in ns["regular"](p)]  # noqa: E731
@@ -972,6 +973,53 @@ def test_twentyfourth_hunt_stays_fixed():
             assert transport.read(ssh, f"{t}/box/keys/mirror/people.csv") == b""
         finally:
             transport._sh = sh
+        for j in pop.jobs + cloud.jobs + mid.jobs:
+            j.join()
+
+
+def test_twentyfifth_hunt_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        (t / "hr/tr.csv").write_text("name\nEmine Demir\nDana Hayes\nLuis Barnes\n")
+        (t / "hr/bordro.md").write_text("EMİNE DEMİR and Agent 47 Quix and Agent-47 Quix.\n")
+        (t / "hr/EMİNE DEMİR bordro.txt").write_text("x\n")
+        for d in ("box/hr/sub", "ws2"):
+            (t / d).mkdir(parents=True)
+        (t / "ws2/ok.txt").write_text("ok\n")
+        out = Path(p["nodes"]["pop"]["out"])
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "real.txt").write_text("done\n")
+        pop = door.Door(p, t / "state", "pop")
+        pop.prepare(lambda scope: lambda text: [("PERSON", "Agent47 Quix")] if scope == "hr" else [])
+        cloud = door.Door({**p, "workspace": str(t / "ws2")}, t / "state", "cloud")
+        view = cloud.read(str(t / "hr/bordro.md"))["text"]
+        assert not re.search(r"(?i)demir|emi\W?ne|quix|agent", view), view            # no crash, no name
+        assert "DEM" not in cloud.read(".")["text"]
+        def probe(link, target):                                                 # '..' by name: the same reply
+            os.symlink(target, t / "ws2" / link)                                # whatever lies on the way
+            return refusal(cloud, "read", path=link)
+        assert probe("a", f"{out}/real.txt/../../../ws2/ok.txt") == probe("b", f"{out}/miss.txt/../../../ws2/ok.txt")
+        GOT.clear()
+        pop.offload("Ask hayes, barnes, huber and mayer; it got deeper.", [], node="cloud")
+        assert not re.search(r"hayes|barnes|huber|mayer", GOT[-1][1]) and "deeper" in GOT[-1][1], GOT[-1][1]
+        node = lambda trust, n, **m: {"trust": trust, "out": str(t / n / "out"), "stage": str(t / n / "stage"), **m}  # noqa: E731
+        q = {**p, "scopes": {f"box:{t}/box/hr": "hr", **p["scopes"]}, "nodes": {**p["nodes"], "box": node(["hr", "hr~"], "box"),
+             "mid": node(["keys", "keys~"], "mid", model={"url": "http://x/v1", "model": "m", "base_url": "http://x/v1"})}}
+        mid = door.Door({**q, "workspace": str(t / "ws3")}, t / "state3", "mid")
+        (t / "ws3").mkdir()
+        (t / "ws3/ok.txt").write_text("ok\n")
+        os.symlink(f"{t}/box/hr/sub/../../../ws3/ok.txt", t / "ws3/a")
+        os.symlink(f"{t}/box/hr/none/../../../ws3/ok.txt", t / "ws3/b")
+        assert refusal(mid, "read", path="a") == refusal(mid, "read", path="b")    # a local node's hidden scope
+        measured = door.measured
+        door.measured = door.here                                               # df sees every volume here
+        try:
+            refusal(door.Door(p, t / "s5", "cloud"), "read", path=".")
+            raise AssertionError("a local node running hidden jobs was accepted")
+        except core.Refused:
+            pass
+        finally:
+            door.measured = measured
         for j in pop.jobs + cloud.jobs + mid.jobs:
             j.join()
 

@@ -116,6 +116,11 @@ def fold(s):
                     .lower() + "_")[0].translate(PLAIN) if ch.isalpha() else ch for ch in s)
 
 
+def key(s):
+    """A whole id as looked up: folded, marks and separators dropped (EMİNE DEMİR, emine_demir: one key)."""
+    return re.sub(r"[\s_.\-]+", "", "".join(c for c in fold(s) if not unicodedata.combining(c)))
+
+
 def spellings(p):
     """How a name part is written without its accents: folded, marks dropped, and Soeren for Søren."""
     f = "".join(c for c in fold(p) if not unicodedata.combining(c))
@@ -302,7 +307,7 @@ class Vault:
             alt = lambda keys: "|".join(re.sub(r"(?<=[A-Za-z])(?=\d)|(?<=\d)(?=[A-Za-z])", r"[\\s_.\\-]*",   # E 10234
                                                re.escape(k).replace(r"\ ", r"[\s_.\-]*"))   # frank_brown, FrankBrown
                                         for k in sorted(keys, key=len, reverse=True))  # noqa: E731
-            joined = {re.sub(r"[\s_.\-]+", "", k): tok for k, tok in t["ids"].items()}   # how a match is looked up
+            joined = {key(k): tok for k, tok in t["ids"].items()}   # how a match is looked up
             forms, folded = {}, {}
             for p, tok in t["parts"].items():
                 for q in {p, p.replace("'", "")}:              # O'Brien, OBrien
@@ -324,7 +329,16 @@ class Vault:
     def scrub(self, text, scopes, fresh=None):
         """The text with every known identifier of `scopes` replaced, each scope by its own table. Nothing
         is learned here: a table holds only what its own scope's files held when lego started, so one
-        scope's view never depends on another's data. `fresh`: text the caller wrote. See own()."""
+        scope's view never depends on another's data. `fresh`: text the caller wrote. See own(). Any
+        failure is Unscrubbable, one answer whatever the text held."""
+        try:
+            return self._view(text, scopes, fresh)
+        except Unscrubbable:
+            raise
+        except Exception:
+            raise Unscrubbable() from None
+
+    def _view(self, text, scopes, fresh):
         text = norm(text)
         if fresh is not None:
             return self.own(text, fresh, set(scopes)) if scopes else text
@@ -341,12 +355,9 @@ class Vault:
 
     def _scrub(self, text, scope, keep):
         ids, forms, res, folded, inner, (digits, numbers), short = self._pattern(scope)
-        def whole(k):                                          # Yilmaz matched Yılmaz under re.I: the same id
-            return ids.get(k) or next(v for i, v in ids.items() if re.fullmatch(re.escape(i), k, re.I))
-
-        def sub(r, look):
-            return self._out(text, lambda seg: r.sub(lambda m: (whole(re.sub(r"[\s_.\-]+", "", m.group(1).lower()))
-                                                              if look is ids else look[m.group(1)]) + m.group(2), seg), keep)
+        def sub(r, look):                                      # Yilmaz for Yılmaz, Agent 47 for Agent47: the same
+            return self._out(text, lambda seg: r.sub(lambda m: ((ids.get(key(m.group(1))) if look is ids else look.get(
+                re.sub(r"[\s_.\-]+", "", m.group(1)), look.get(m.group(1)))) or "[ID]") + m.group(2), seg), keep)
         if res[0]:                                             # whole values first: E-10234 before its 10234
             text = sub(res[0], ids)
         if digits:                                             # dates written out: the DOB's digits
@@ -443,7 +454,7 @@ class Vault:
         for scope in sorted(scopes):
             ids, forms = self._pattern(scope)[:2]
             lower = {k.lower(): t for k, t in forms.items()}
-            name = re.sub(r"(?<!\[)[A-Za-z0-9]+(?![\w]*\])", lambda m: ids.get(m.group(0).lower())
+            name = re.sub(r"(?<!\[)[A-Za-z0-9]+(?![\w]*\])", lambda m: ids.get(key(m.group(0)))
                           or lower.get(m.group(0).lower()) or m.group(0), name)
         return name
 
@@ -520,6 +531,8 @@ except OSError:
 def word(w):
     """In the dictionary, as written or inflected (salaries, reviewed, offloading)."""
     w = w.lower()
-    return w in WORDS or any(w.endswith(a) and w[:-len(a)] + b in WORDS for a, b in (
-        ("s", ""), ("es", ""), ("ies", "y"), ("ed", ""), ("ed", "e"), ("ing", ""), ("ing", "e"), ("ly", ""),
-        ("er", ""), ("ers", ""), ("'s", ""), ("ising", "ize"), ("ise", "ize"), ("ised", "ize"), ("est", ""), ("iest", "y")))
+    return w in WORDS or any(w.endswith(a) and w[:-len(a)] + b in WORDS and len(w) - len(a) >= n for a, b, n in (
+        ("s", "", 1), ("ies", "y", 1), ("ed", "", 1), ("ed", "e", 1), ("ing", "", 1), ("ing", "e", 1), ("ly", "", 1),
+        ("er", "", 4), ("ers", "", 4), ("'s", "", 1), ("ising", "ize", 1), ("ise", "ize", 1), ("ised", "ize", 1),
+        ("est", "", 1), ("iest", "y", 1))) or bool(re.search(r"(s|x|z|ch|sh|o)es$", w)) and w[:-2] in WORDS
+                                                               # deeper, not huber; catches, not hayes

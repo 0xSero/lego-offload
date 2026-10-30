@@ -114,10 +114,14 @@ def literals(schema):
     return [*schema.get("enum", []), *schema.get("int", []), *(x for t in schema.get("tuple", []) for x in literals(t))]
 
 
-def same_disk(a, b):
-    """Whether two paths' nearest existing folders are on one file system (the room can df its own)."""
-    dev = lambda p: os.stat(next(q for q in [p, *Path(p).parents] if os.path.exists(q))).st_dev  # noqa: E731
-    return dev(a) == dev(b)
+def here(node):
+    """Does a node keep its files on this machine?"""
+    return not node.get("ssh")
+
+
+def measured(node):
+    """Could the room measure a node's job files? Yes for any on this machine: df reads every volume."""
+    return here(node)
 
 
 def inside(a, b):
@@ -156,6 +160,8 @@ class Door:
         if any(inside(canon(d), self.ws) for d in (self.taint_file.parent, Path("~/.lego").expanduser())):
             raise core.Refused("the workspace holds lego's taints and locks: the room could rewrite them")
         self.roots = [d.partition(":")[2] for d in self.scopes if d.startswith(self.host + ":")]   # private dirs here
+        self.stops = self.roots + [d.partition(":")[2] for d in self.scopes if here(policy["nodes"].get(
+            d.partition(":")[0], {}))] + [v[k] for v in policy["nodes"].values() if here(v) for k in ("out", "stage") if k in v]
         mine = [str(self.state.resolve())] + self.roots + [
             v[k] for v in policy["nodes"].values() if not v.get("ssh") for k in ("out", "stage") if k in v]
         if any(inside(self.ws, canon(d)) or inside(canon(d), self.ws) for d in mine):
@@ -164,11 +170,11 @@ class Door:
         self.me = self.nodes[caller] if caller else core.Node("", frozenset())
         self.seen = self.me.trust
         self.raw = {s for s in self.seen if not s.endswith("~")}  # scopes the caller sees as written
-        for n, v in policy["nodes"].items():                   # a hidden job's output size must not show in df
-            if runnable(v) and not v.get("ssh") and n != self.host and \
-                    set(self.scopes.values()) & set(v["trust"]) - self.seen and same_disk(v["out"], self.ws):
-                raise core.Refused(f"{n} keeps its jobs' files on the workspace's disk, where the agent could "
-                                   f"measure them: give it ssh, or a \"dir\" on another volume")
+        for n, v in policy["nodes"].items():                   # a hidden job's size must not show in df, which
+            if runnable(v) and measured(v) and n != self.host and \
+                    set(self.scopes.values()) & set(v["trust"]) - self.seen:   # sees every volume of this machine
+                raise core.Refused(f"{n} would keep jobs on data hidden from {caller} on this machine, where "
+                                   f"{caller}'s agent could measure them: give {n} ssh to another machine")
         near = {w: t for w, t in self._taints().items() if inside(canon(w.lstrip("@")), self.ws)
                 or inside(self.ws, canon(w.lstrip("@")))}      # this workspace, and ones nested in or around it
         self.context = {s for w, t in near.items() if not w.startswith("@") for s in t}   # given to the caller
@@ -331,7 +337,7 @@ class Door:
         readlink, one hop at a time; each step looks up one name in a folder held open, never through a link."""
         cur, rest, hops = "/", [p for p in path.split("/") if p], 0
         while rest:
-            if any(inside(cur, r) for r in self.roots):
+            if any(inside(cur, r) for r in self.stops):        # a private folder on this disk: never looked into
                 if {".", ".."} & set(rest):
                     raise core.Refused("name files inside a private directory by plain paths, without . or ..")
                 return os.path.join(cur, *rest)
@@ -350,7 +356,8 @@ class Door:
                     if hops == 40:
                         raise core.Refused("too many links")
                     hops, tgt = hops + 1, os.readlink(p, dir_fd=fd)
-                    cur, rest = ("/" if tgt.startswith("/") else cur), [q for q in tgt.split("/") if q] + rest
+                    rest = [q for q in os.path.normpath(os.path.join(cur, tgt, *rest)).split("/") if q]
+                    cur = "/"                                  # its '..' by name, never by what exists
                 else:
                     cur = spelled(fd, p) or os.path.join(cur, p)   # case and firmlinks only: p is no link
             except OSError:
