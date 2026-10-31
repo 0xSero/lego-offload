@@ -6,15 +6,14 @@ is the caller. It reads through `give`. Its task text and its workspace carry ev
 been given, so they cross by the same rule. A job whose inputs the caller could see comes back in
 full. A job on more than that comes back as a shaped answer at the deadline, or a receipt.
 
-Fixed order for every offload: label the inputs -> pick a node that may be given all of them ->
-queue on that node (one job at a time; a job hidden from the caller also carries the scopes of a
-job it may be timed against; a job the caller may see waits until the node is surely idle) ->
-choose the reply row from labels and the ledger (charging before anything is read) -> move the
-inputs -> run -> reply. Every decision is a core.py brick on the scopes hidden from the caller;
-verify/Lego.lean proves this composition for any policy.
-"""
+Fixed order for every offload: label the inputs -> pick a node that may be given all of them -> queue on that node
+(one job at a time; a job hidden from the caller also carries the scopes of a job it may be timed against; a job the
+caller may see waits until the node is surely idle) -> choose the reply row from labels and the ledger (charging
+before anything is read) -> move the inputs -> run -> reply. Every decision is a core.py brick on the scopes hidden
+from the caller; verify/Lego.lean proves this composition for any policy."""
 import collections
 import concurrent.futures
+import contextlib
 import fcntl
 import hmac
 import ipaddress
@@ -89,8 +88,7 @@ def getpath(fd):
 
 
 def spelled(dirfd, name):
-    """The on-disk spelling of `name` in an open folder, not following it if it is a link (None if it
-    cannot be opened)."""
+    """The on-disk spelling of `name` in an open folder, not following it if it is a link (None: no open)."""
     try:
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dirfd)
     except OSError:
@@ -285,8 +283,7 @@ class Door:
                     self.snap[f"{node}:{path}"] = data         # from this copy, so nothing crosses at request time
         also = [self.rel(ref, scope) for ref, _, scope, _ in todo]
         with concurrent.futures.ThreadPoolExecutor(8) as pool:   # the local model reads every file at once
-            ids = list(pool.map(lambda job: job[0][3](scrub.searched(job[0][1], job[1])[1]) if job[0][3] else [],
-                                zip(todo, also)))
+            ids = list(pool.map(lambda t, rel: t[3](scrub.searched(t[1], rel)[1]) if t[3] else [], todo, also))
         for (ref, data, scope, _), rel, got in zip(todo, also, ids):
             self.vault.learn(ref, data, [scope], lambda text, got=got: got, also=rel)
         for d in self.scopes:                                  # a listing never walks a scope at request time:
@@ -345,25 +342,16 @@ class Door:
             if f"{node}:{path}" not in self.scopes:
                 raise core.Refused(f"name files in {sorted(named)} by the names listed (read \".\" lists them)")
         if node == self.host:                                  # upto() followed every link it met by readlink; from
-            try:                                               # here on, none is: one open, no link on the way
-                fd = transport.nofollow(path)
-            except FileNotFoundError:
-                fd = None
-            except OSError:                                    # a link in a private folder, or one swapped in after
-                raise core.Refused(f"{asked} goes through a link lego does not follow; name the file itself") from None
-            if fd is not None:
-                try:
-                    st, path = os.fstat(fd), getpath(fd) or path   # its spelling on disk, from the open file
-                finally:
-                    os.close(fd)
+            got = self.kind(path, asked, lambda fd: (os.fstat(fd), getpath(fd) or path))   # here on, none is: one
+            if got:                                            # open, no link on the way; its spelling on disk,
+                st, path = got                                 # from the open file
                 if inside(path, self.ws) and st.st_nlink > 1 and not stat.S_ISDIR(st.st_mode):
                     raise core.Refused(f"{asked} is hardlinked")
                 if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):
                     raise core.Refused(f"{asked} is not a regular file")
                 self.inodes[f"{node}:{path}"] = (st.st_dev, st.st_ino)
-        elif not internal and f"{node}:{path}" not in self.refs and f"{node}:{path}" not in self.snap:   # on another
-                                                               # machine: no link on the way there
-            try:
+        elif not internal and f"{node}:{path}" not in self.refs and f"{node}:{path}" not in self.snap:
+            try:                                               # on another machine: no link on the way there
                 transport.kind(self.p["nodes"][node], path)
             except RuntimeError:
                 raise core.Refused(f"{asked} goes through a link lego does not follow, or is not a regular file") from None
@@ -428,9 +416,8 @@ class Door:
         return ((core.Item(item.ref, s, item.node), True) if core.may_hold(node, s) else None)
 
     def bytes_of(self, item, scrubbed, timeout=60, node=None, data=None):
-        """An item's bytes, scrubbed if asked. A host file is opened without following links, never
-        waits (a FIFO is refused, not opened), and must be the very file that was labelled. `data`:
-        bytes already read."""
+        """An item's bytes, scrubbed if asked. A host file is opened without following links, never waits
+        (a FIFO is refused, not opened), and must be the very file that was labelled. `data`: bytes already read."""
         to, (node, _, path) = node or self.me, item.ref.partition(":")
         if data is None and node == self.host:
             fd = transport.nofollow(path)                       # no link anywhere on the way
@@ -451,12 +438,8 @@ class Door:
         if not scrubbed:
             return data
         tags = self.tags(item, to)
-        if not self.mine(item) and len(tags) == 1 and (item.ref, *tags) in self.views:
-            ok, view = self.views[(item.ref, *tags)]
-            if not ok:
-                raise core.Refused(view)
-            return view
-        ok, view = self.view(data, tags, self.fresh if self.mine(item) else None)
+        made = not self.mine(item) and len(tags) == 1 and (item.ref, *tags) in self.views   # made at the start
+        ok, view = self.views[(item.ref, *tags)] if made else self.view(data, tags, self.fresh if self.mine(item) else None)
         if not ok:
             raise core.Refused(view)
         return view
@@ -523,8 +506,7 @@ class Door:
         return "\n".join(lines) or "  (none)"
 
     def listing(self):
-        files = sorted(os.path.relpath(f, self.ws) for f in transport.walk(self.ws, lambda e: True,
-                                                                          lambda name: name.startswith(".")))
+        files = sorted(os.path.relpath(f, self.ws) for f in transport.walk(self.ws, lambda e: True, lambda n: n.startswith(".")))
         return (f"Your workspace {self.ws} (relative paths mean files here):\n" +
                 "\n".join("  " + f for f in files[:200]) + "\nPrivate directories:\n" + self.catalog())
 
@@ -552,16 +534,16 @@ class Door:
         return {"row": "scrubbed" if got[1] else "full", "text": text,
                 **({"note": f"lego: {', '.join(cut)} can now take no more tasks from you."} if cut else {})}
 
-    def kind(self, path):
-        """A host path's file type, with no link followed on the way (None: missing)."""
+    def kind(self, path, asked="the path", of=lambda fd: stat.S_IFMT(os.fstat(fd).st_mode)):
+        """of(a host path opened with no link followed on the way), by default its file type (None: missing)."""
         try:
             fd = transport.nofollow(path)
         except FileNotFoundError:
             return None
-        except OSError:
-            raise core.Refused("the path goes through a link lego does not follow; name the file itself") from None
+        except OSError:                                        # a link in a private folder, or one swapped in after
+            raise core.Refused(f"{asked} goes through a link lego does not follow; name the file itself") from None
         try:
-            return stat.S_IFMT(os.fstat(fd).st_mode)
+            return of(fd)
         finally:
             os.close(fd)
 
@@ -622,10 +604,8 @@ class Door:
             if found and found != [path]:                      # one swapped for a link meanwhile: dropped, whatever
                 got = []                                       # it points at, and before a look at it
                 for f in (f for f in found if inside(f, path)):
-                    try:
+                    with contextlib.suppress(core.Refused):
                         got.append(self.item(f"{node}:{f}", internal=True))
-                    except core.Refused:
-                        pass
             out += [i for i in got if inside(i.ref.partition(":")[2], path)]   # swapped for a link meanwhile: dropped
         return out
 
@@ -648,14 +628,14 @@ class Door:
         if any(s and i.ref in self.deferred for i, s in given):
             raise core.Refused("data hidden from you goes only to a model that sees it raw")
         scrub_task = given[-1][1] or not everything            # names it saw in this tool's text, too
-        task = self.vault.scrub(task, self.tags(ins[-1], reader), self.fresh) if scrub_task else task
-        if scrub_task and returns and (tags := self.tags(ins[-1], reader)):   # its literals reach the model as written
+        tags = self.tags(ins[-1], reader) if scrub_task else set()
+        task = self.vault.scrub(task, tags, self.fresh) if scrub_task else task
+        if returns and tags:                                   # its literals reach the model as written
             for x in literals(returns):
                 if self.vault.own(scrub.norm(str(x)), {}, tags) != scrub.norm(str(x)):
                     raise core.Refused(f"returns: {x!r} would reach {n} as written, but it sees this data scrubbed. "
                                        "Use plain words, placeholders you were given, and int bounds under 1000")
-        typed = set() if scrub_task and self.tags(ins[-1], reader) else self.raw & set(self.scopes.values())   # a
-                                                               # task that went raw: its output may hold them
+        typed = set() if tags else self.raw & set(self.scopes.values())   # a task that went raw: its output may hold them
         snap = {i.ref: self.bytes_of(i, False) for i, _ in given[:-1] if self.mine(i)}   # the caller's files, read
         with self.locks[n]:                                    # now: the job never touches the workspace
             t0 = time.time()
@@ -702,10 +682,9 @@ class Door:
             if any(s for _, s in given) or not everything:    # the real names' order is theirs too
                 given = secrets.SystemRandom().sample(given, len(given))
             for i, s in given:
-                if self.whole(i, s, n):                        # raw and not the caller's to see: its whole scope, as
-                                                               # one pipe, walked on the node, where a link on the way
-                                                               # gives no file (keys/mirror -> hr); nothing here looks
-                                                               # inside it, and no single file's size or name crosses
+                if self.whole(i, s, n):                        # raw and not the caller's to see: its whole scope,
+                    # as one pipe, walked on the node, where a link on the way gives no file (keys/mirror -> hr);
+                    # nothing here looks inside it, and no single file's size or name crosses
                     root = next(r for d in self.scopes if (r := d.partition(":")[2]) and d.startswith(i.node + ":")
                                 and inside(i.ref.partition(":")[2], r))
                     if i.node != n and (n, i.node, root) not in self.staged:   # the whole scope, once per node,
@@ -758,13 +737,11 @@ class Door:
                 "inputs, the model gets them at your level (or its own, if lower) and you get the full result, with "
                 "placeholders of data you see raw put back: tell it to copy placeholders as written. To use more than "
                 "you see, pass `returns`: one small typed answer paid from a per-scope bit allowance and sent after a "
-                "fixed delay; without it you get a receipt "
-                "(the result is saved for the user; its ref can be an input later).")
+                "fixed delay; without it you get a receipt (the result is saved for the user; its ref can be an input later).")
 
     def tools(self):
-        about = self.about()
         return [{"name": "read", "description": "Read a file at your level: raw, scrubbed, or refused. `read \".\"` "
-                 "lists your workspace and the private files you can name.\n\n" + about, "inputSchema": {
+                 "lists your workspace and the private files you can name.\n\n" + self.about(), "inputSchema": {
                      "type": "object", "required": ["path"], "properties": {"path": {
                          "type": "string", "description": "a listed path, a workspace-relative path, or an offload ref"}}}},
                 {"name": "offload", "description": "Hand a task to another model (see the read tool for the rules).",
@@ -788,10 +765,8 @@ class Door:
             a, name = msg["params"].get("arguments", {}), msg["params"].get("name")
             try:
                 if isinstance(a, dict) and isinstance(a.get("inputs"), str):      # one path, or a list sent as text
-                    try:
+                    with contextlib.suppress(ValueError):
                         a["inputs"] = json.loads(a["inputs"]) if a["inputs"].lstrip().startswith("[") else [a["inputs"]]
-                    except ValueError:
-                        pass
                 if not isinstance(a, dict) or not isinstance(a.get("inputs") or [], list):
                     raise core.Refused("arguments must be {task, inputs: [..], returns, node}")
                 if name == "read":
@@ -816,8 +791,7 @@ def serve(door, port, bind="127.0.0.1", token=None, peers=None):
     """MCP over HTTP. With `token`, only a request with `Authorization: Bearer <token>` from an address in
     `peers` (the VM network) is answered."""
     class H(BaseHTTPRequestHandler):
-        def log_message(self, *a):
-            pass
+        log_message = lambda self, *a: None  # noqa: E731
 
         def do_GET(self):
             self.send_response(405)
@@ -836,14 +810,12 @@ def serve(door, port, bind="127.0.0.1", token=None, peers=None):
             except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
                 reply = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "bad request"}}
             body = json.dumps(reply).encode() if reply else b""
-            try:
+            with contextlib.suppress(BrokenPipeError, ConnectionResetError):   # the agent left before its reply
                 self.send_response(200 if reply else 202)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
-            except (BrokenPipeError, ConnectionResetError):   # the agent left before its reply
-                pass
 
     srv = ThreadingHTTPServer((bind, port), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()

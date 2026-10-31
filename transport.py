@@ -4,6 +4,7 @@ A node is local (runs here) or reached over ssh. Bytes always pass through this 
 which policy requires to be trusted with every scope. Jobs run on the node holding the
 inputs and call that node's own model, so private text never crosses the network to it.
 """
+import contextlib
 import json
 import os
 import secrets
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import time
 
+SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
 OPEN = r'''
 import os, stat, sys
 def opn(p):                                    # one component at a time from /, no link followed on the way
@@ -91,7 +93,6 @@ def stop(*_):
     raise TimeoutError
 signal.signal(signal.SIGALRM, stop)
 signal.setitimer(signal.ITIMER_REAL, job["timeout"] - (0.75 if hold else 0))   # the whole job, not each read
-res = {"took": 0.0, "output": None, **({"answer": None} if job.get("shaped") else {})}
 try:
     docs = "".join("\n--- %s ---\n%s" % (f, b.decode(errors="replace")) for p in job["files"] for f, b in regular(p))
     body = {"model": job["model"]["model"], "messages": [
@@ -132,8 +133,7 @@ print(json.dumps(res).ljust(8192) if hold else json.dumps(res))
 
 def _sh(node, cmd, data=None, timeout=60):
     """Run a shell command on a node; returns stdout bytes."""
-    argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", node["ssh"], cmd] if node.get("ssh") \
-        else ["/bin/sh", "-c", cmd]
+    argv = SSH + [node["ssh"], cmd] if node.get("ssh") else ["/bin/sh", "-c", cmd]
     r = subprocess.run(argv, input=data, capture_output=True, timeout=timeout)
     if r.returncode:
         raise RuntimeError(f"{cmd.split()[0]} failed on {node.get('ssh', 'local')}: {r.stderr.decode()[-300:]}")
@@ -189,7 +189,7 @@ def read(node, path, timeout=60):
 def files(node, root):
     """The regular files under a directory on a node, sorted."""
     if not node.get("ssh"):                                     # here: what `find -type f` lists, no process
-        return sorted(_regular(root))
+        return sorted(walk(root))
     out = _node(node, "files", root, 120)                       # there, as here: no link entered; names may hold newlines
     return sorted(f for f in out.decode(errors="replace").split("\0") if f)
 
@@ -212,15 +212,10 @@ def nofollow(path, flags=os.O_RDONLY):
         raise
 
 
-def _regular(top):
-    """Regular files at or under `top`: links neither followed nor listed (not even on the way to top, or
-    swapped in during the walk: each folder is opened from its parent's descriptor), unreadable folders skipped."""
-    return walk(top, lambda e: e.is_file(follow_symlinks=False))
-
-
-def walk(top, keep, skip=lambda name: False):
-    """Entries under `top` that are not folders and that keep(entry) accepts (a link is such an entry, never
-    entered), never entering a folder whose name skip() accepts; each folder opened from its parent's descriptor."""
+def walk(top, keep=lambda e: e.is_file(follow_symlinks=False), skip=lambda name: False):
+    """Entries under `top` that are not folders and that keep(entry) accepts (by default regular files: a link is
+    neither followed nor listed, not even on the way to top), never entering a folder whose name skip() accepts or
+    that cannot be read; each folder opened from its parent's descriptor, so a link swapped in is never entered."""
     try:
         fd = nofollow(top)
     except OSError:
@@ -233,18 +228,13 @@ def walk(top, keep, skip=lambda name: False):
 
     def enter(p, d):
         subs = []
-        try:
-            with os.scandir(d) as it:
-                for e in it:
-                    try:
-                        if e.is_dir(follow_symlinks=False):
-                            subs += [] if skip(e.name) else [e.name]
-                        elif keep(e):
-                            out.append(os.path.join(p, e.name))
-                    except OSError:
-                        pass
-        except OSError:
-            pass
+        with contextlib.suppress(OSError), os.scandir(d) as it:
+            for e in it:
+                with contextlib.suppress(OSError):
+                    if e.is_dir(follow_symlinks=False):
+                        subs += [] if skip(e.name) else [e.name]
+                    elif keep(e):
+                        out.append(os.path.join(p, e.name))
         stack.append((p, d, subs))
     enter(top, fd)
     while stack:                                               # a loop, not recursion: any depth
@@ -254,10 +244,8 @@ def walk(top, keep, skip=lambda name: False):
             stack.pop()
             continue
         n = subs.pop()
-        try:
+        with contextlib.suppress(OSError):
             enter(os.path.join(p, n), os.open(n, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=d))
-        except OSError:
-            pass
     return out
 
 
@@ -279,8 +267,7 @@ def put_tree(node, dst_dir, src, timeout=60):
     dst = f"{dst_dir}/{secrets.token_hex(8)}"
     parent, base = os.path.split(src.rstrip("/"))
     unpack = f"mkdir -p {shlex.quote(dst)} && tar -C {shlex.quote(dst)} -xf -"
-    sink = f"ssh -o BatchMode=yes -o ConnectTimeout=10 {shlex.quote(node['ssh'])} {shlex.quote(unpack)}" if node.get("ssh") \
-        else "/bin/sh -c " + shlex.quote(unpack)
+    sink = shlex.join(SSH + [node["ssh"], unpack] if node.get("ssh") else ["/bin/sh", "-c", unpack])
     p = subprocess.Popen(["/bin/sh", "-c", f"tar -C {shlex.quote(parent)} -cf - {shlex.quote(base)} | {sink}"],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     try:
@@ -378,7 +365,7 @@ def run_anthropic(node, files, task, schema, out_path, keep, timeout):
     import urllib.request
     import route
     docs = "".join(f"\n--- {f.rsplit('/', 1)[-1].split('-', 1)[-1]} ---\n" + read({}, f).decode(errors="replace")
-                   for p in files for f in sorted(_regular(p)))
+                   for p in files for f in sorted(walk(p)))
     sys = ("Answer the task from the files given, or from what you know if none are. Placeholders like [PERSON_3f9a] "
            "stand for real values: use them as the values, copied exactly.")
     if schema:

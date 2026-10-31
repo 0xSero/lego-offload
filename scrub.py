@@ -1,10 +1,8 @@
-"""Scrub: the middle level, "scrubbed". A model that sees a scope scrubbed gets the same text with
-every identifier (names, emails, phones, addresses, account numbers, keys) swapped for a stable
-placeholder such as [PERSON_3f9a]: the same person is the same placeholder in every file and message,
-so the data still joins up. The vault (identifier -> placeholder) is learned from the private files
-before any of them crosses, lives only on this host, and turns placeholders back into the real
-values, each only for a model that sees its scope raw.
-"""
+"""Scrub: the middle level, "scrubbed". A model that sees a scope scrubbed gets the same text with every identifier
+(names, emails, phones, addresses, account numbers, keys) swapped for a stable placeholder such as [PERSON_3f9a]: the
+same person is the same placeholder in every file and message, so the data still joins up. The vault (identifier ->
+placeholder) is learned from the private files before any of them crosses, lives only on this host, and turns
+placeholders back into the real values, each only for a model that sees its scope raw."""
 import csv
 import hashlib
 import hmac
@@ -21,18 +19,9 @@ import unicodedata
 from pathlib import Path
 
 
-def _luhn(s):
-    d = [int(c) for c in s if c.isdigit()][::-1]
-    return sum(x if i % 2 == 0 else x * 2 - 9 * (x > 4) for i, x in enumerate(d)) % 10 == 0
-
-
 def _iban(s):
     s = s.replace(" ", "")
     return int("".join(str(int(c, 36)) for c in s[4:] + s[:4])) % 97 == 1
-
-
-def _token(s):                                                 # random-looking: mixed case and digits, or hex
-    return bool(re.fullmatch(r"[0-9a-f]{32,}", s)) or all(re.search(p, s) for p in ("[a-z]", "[A-Z]", "[0-9]"))
 
 
 # kind: (pattern, check). Patterns are linear (no nested repeats); a check rejects look-alikes.
@@ -42,10 +31,12 @@ PATTERNS = {
             r"|\b(?:AKIA|ASIA)[0-9A-Z]{16,40}\b|\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", None),
     "SECRET": (r"(?i:passw(?:or)?d|pwd|secret|token|api[_-]?key|access[_-]?key|_key|credential)[\w-]{0,40}\s*[=:]\s*"
                r"[\"']?([^\s\"']{6,})", None),            # AWS_ACCESS_KEY_ID=..., STRIPE_KEY=..., DB_PASSWORD=...
-    "TOKEN": (r"(?<![\w+/=-])[A-Za-z0-9+/_-]{24,}={0,2}", _token),
+    "TOKEN": (r"(?<![\w+/=-])[A-Za-z0-9+/_-]{24,}={0,2}",                   # random-looking: mixed case and digits, or hex
+              lambda s: bool(re.fullmatch(r"[0-9a-f]{32,}", s)) or all(re.search(p, s) for p in ("[a-z]", "[A-Z]", "[0-9]"))),
     "EMAIL": (r"(?<![\w.+-])[\w.+-]{1,64}@[\w-]+(?:\.[\w-]+)+", None),
     "SSN": (r"\b\d{3}-\d{2}-\d{4}\b", None),
-    "CARD": (r"\b(?:\d{4}(?:[ -]?\d{4}){2}[ -]?\d{1,7}|\d{4}[ -]?\d{6}[ -]?\d{4,5})\b", _luhn),
+    "CARD": (r"\b(?:\d{4}(?:[ -]?\d{4}){2}[ -]?\d{1,7}|\d{4}[ -]?\d{6}[ -]?\d{4,5})\b",          # Luhn
+             lambda s: sum(x if i % 2 == 0 else x * 2 - 9 * (x > 4) for i, x in enumerate([int(c) for c in s if c.isdigit()][::-1])) % 10 == 0),
     "IBAN": (r"\b[A-Z]{2}\d{2}(?: ?[A-Z0-9]{4}){2,7}(?: ?[A-Z0-9]{1,3})?\b", _iban),
     "PHONE": (r"(?:\+\d{1,3}[ .-]?)?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}\b|\+\d{1,3}(?:[ -]?\(0?\d{0,4}\)\d{0,4}|[ -]\d{1,8}"
               r"|\.\d{2,5}){2,6}\b|\+\d{8,15}\b|\b0\d{1,4}[ -]?\d{3,4}[ -]?\d{2,4}\b",
@@ -90,21 +81,14 @@ def text_of(data):
     (a binary file cannot be scrubbed, so it never goes out scrubbed)."""
     if isinstance(data, str):
         return data
-    for bom, enc in ((b"\xef\xbb\xbf", "utf-8-sig"), (b"\xff\xfe\x00\x00", "utf-32"), (b"\x00\x00\xfe\xff", "utf-32"),
-                     (b"\xff\xfe", "utf-16"), (b"\xfe\xff", "utf-16")):
-        if data.startswith(bom):
-            break
-    else:
-        enc = "utf-16-le" if data[1:200:2].count(0) > 40 else "utf-16-be" if data[:200:2].count(0) > 40 else "utf-8"
+    enc = next((e for bom, e in ((b"\xef\xbb\xbf", "utf-8-sig"), (b"\xff\xfe\x00\x00", "utf-32"), (b"\x00\x00\xfe\xff", "utf-32"),
+                                 (b"\xff\xfe", "utf-16"), (b"\xfe\xff", "utf-16")) if data.startswith(bom)), None) \
+        or ("utf-16-le" if data[1:200:2].count(0) > 40 else "utf-16-be" if data[:200:2].count(0) > 40 else "utf-8")
     try:
         text = data.decode(enc)
     except UnicodeDecodeError:
         return None
     return None if re.search(r"[\x00-\x08\x0e-\x1f]", text) else text
-
-
-def flat(s):
-    return re.sub(r"\s+", " ", s.strip())
 
 
 MARK = "\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f"   # combining marks NFKC leaves loose (Yoruba tones)
@@ -125,10 +109,9 @@ def key(s):
 
 def spellings(p):
     """How a name part is written without its accents: folded, marks dropped, and Soeren for Søren."""
-    f = "".join(c for c in fold(p) if not unicodedata.combining(c))
     wide = p.lower().translate(str.maketrans({"ø": "oe", "æ": "ae", "œ": "oe", "ß": "ss", "þ": "th", "ä": "ae", "ö": "oe",
                                               "ü": "ue", "å": "aa"}))
-    return {f, "".join(c for c in fold(wide) if not unicodedata.combining(c))}
+    return {"".join(c for c in fold(p) if not unicodedata.combining(c)), "".join(c for c in fold(wide) if not unicodedata.combining(c))}
 
 
 class Unscrubbable(ValueError):
@@ -209,73 +192,67 @@ class Vault:
             self._re, self.dirty = {}, True
 
     def add(self, value, kind, scopes):
-        for scope in scopes:
-            self._add(value, kind, scope)
-
-    def _add(self, value, kind, scope):
-        value = flat(norm(value)).strip(".'\"")
+        value = re.sub(r"\s+", " ", norm(value).strip()).strip(".'\"")
         check = PATTERNS.get(kind, (None, None))[1]
         if len(value) < 2 or TOKEN.fullmatch(value) or (check and not check(value)) \
                 or (kind == "ID" and value.isdigit() and len(value) < 5):   # short numbers are not identifiers
             return
-        t = self._t(scope)
         whole = kind != "PERSON" or " " in value                       # one-word names live in "parts"
-        if whole:
-            token = t["ids"].get(value.lower()) or self._new(value, kind, scope)
-            self._put(t["ids"], value.lower(), token)
-            bare = re.sub(r"[\W_]+", "", value).lower()          # E-10234 written E10234
-            if kind in ("ID", "ADDRESS", "IBAN", "CARD") and bare != value.lower() and len(bare) >= 4 and not bare.isdigit():
-                self._put(t["ids"], bare, token)
-            digits = re.sub(r"\D", "", value)
-            forms = {digits, digits[-10:]} if len(digits) >= 7 else set()   # 4155550134, (415) 555 0134, +1 ...
-            if kind == "PHONE" and len(digits) >= 10:
-                forms |= {digits[-7:], digits[-8:]}             # 555-0134, 7946 0958
-                forms |= {cc + digits[-10:] for cc in ("1", "01", "001", "011", "0")}   # 14155550134, wa.me/1...
-            tail = re.search(r"\d{4,}$", bare)
-            if kind == "ID" and tail:                           # E-10234 called "staff no. 10234" or "E 102 34"
-                forms.add(tail.group(0))
-            ymd = re.fullmatch(r"(\d{4})\D(\d{1,2})\D(\d{1,2})|(\d{1,2})\D(\d{1,2})\D(\d{4})", value)
-            if kind == "DOB" and ymd:                           # 1985-03-14 = 14/03/1985 = 03.14.1985 = 14/3/85
-                y, a, b = ymd.group(1, 2, 3) if ymd.group(1) else (ymd.group(6), ymd.group(4), ymd.group(5))
-                forms = {f for a, b in {(a.zfill(2), b.zfill(2)), (str(int(a)), str(int(b)))} for f in (
-                    y + a + b, a + b + y, b + a + y, a + b + y[2:], b + a + y[2:])}
-            if kind in ("PHONE", "SSN", "CARD", "IBAN", "ID", "DOB"):
-                for d in forms:
-                    self._put(t["digits"], d, token)
-        local = value.split("@")[0].lower() if kind == "EMAIL" else ""
-        if len(local) >= 2 and local not in WORDS and local not in COMMON:   # jdoe1985, amiller at gmail dot com
-            self._put(t["ids"], local, token)
-        if kind == "ADDRESS":                                          # "41 Larkspur Mews" and "Oakhollow" too
-            for part in re.split(r"\s*,\s*", value):
-                for p in (part, re.sub(r"^\d{1,5}[A-Za-z]?,?\s+", "", part)):   # "Larkspur Mews" too
-                    if len(p) >= 3 and not p.isdigit():
-                        self._put(t["ids"], p.lower(), token)
-                        street = p.rsplit(" ", 1)[0] if " " in p else ""     # "Larkspur" too
-                        if len(street) >= 4 and not street[:1].isdigit():   # its own files: over-scrub, never under
-                            self._put(t["ids"], street.lower(), token)
-        if kind == "PERSON":                                           # "Alice" or "Nguyen" alone name her too
-            for part in {p for sep in (r"[\s,]+", r"[\s,-]+") for p in re.split(sep, value)}:
-                part = part.strip(".'\"")
-                part = part[:1].upper() + part[1:] if part.islower() else part
-                if len(part) < 2 or part == value and whole:
-                    continue
-                have = t["parts"].get(part)
-                if have is None:
-                    self._put(t["parts"], part, token if whole else self._new(part, kind, scope))
-                elif whole and have != token and self.v["real"].get(have) != part:   # two people of this scope
-                    t["parts"][part] = self._new(part, kind, scope)                  # share it: its own token
-
-    def find_in(self, text, scopes):
-        for kind, (p, check) in PATTERNS.items():
-            for m in re.finditer(p, text):
-                self.add(m.group(1) if m.lastindex else m.group(0), kind, scopes)
+        for scope in scopes:
+            t = self._t(scope)
+            if whole:
+                token = t["ids"].get(value.lower()) or self._new(value, kind, scope)
+                self._put(t["ids"], value.lower(), token)
+                bare = re.sub(r"[\W_]+", "", value).lower()          # E-10234 written E10234
+                if kind in ("ID", "ADDRESS", "IBAN", "CARD") and bare != value.lower() and len(bare) >= 4 and not bare.isdigit():
+                    self._put(t["ids"], bare, token)
+                digits = re.sub(r"\D", "", value)
+                forms = {digits, digits[-10:]} if len(digits) >= 7 else set()   # 4155550134, (415) 555 0134, +1 ...
+                if kind == "PHONE" and len(digits) >= 10:
+                    forms |= {digits[-7:], digits[-8:]}             # 555-0134, 7946 0958
+                    forms |= {cc + digits[-10:] for cc in ("1", "01", "001", "011", "0")}   # 14155550134, wa.me/1...
+                tail = re.search(r"\d{4,}$", bare)
+                if kind == "ID" and tail:                           # E-10234 called "staff no. 10234" or "E 102 34"
+                    forms.add(tail.group(0))
+                ymd = re.fullmatch(r"(\d{4})\D(\d{1,2})\D(\d{1,2})|(\d{1,2})\D(\d{1,2})\D(\d{4})", value)
+                if kind == "DOB" and ymd:                           # 1985-03-14 = 14/03/1985 = 03.14.1985 = 14/3/85
+                    y, a, b = ymd.group(1, 2, 3) if ymd.group(1) else ymd.group(6, 4, 5)
+                    forms = {f for a, b in {(a.zfill(2), b.zfill(2)), (str(int(a)), str(int(b)))} for f in (
+                        y + a + b, a + b + y, b + a + y, a + b + y[2:], b + a + y[2:])}
+                if kind in ("PHONE", "SSN", "CARD", "IBAN", "ID", "DOB"):
+                    for d in forms:
+                        self._put(t["digits"], d, token)
+            local = value.split("@")[0].lower() if kind == "EMAIL" else ""
+            if len(local) >= 2 and local not in WORDS and local not in COMMON:   # jdoe1985, amiller at gmail dot com
+                self._put(t["ids"], local, token)
+            if kind == "ADDRESS":                                          # "41 Larkspur Mews" and "Oakhollow" too
+                for part in re.split(r"\s*,\s*", value):
+                    for p in (part, re.sub(r"^\d{1,5}[A-Za-z]?,?\s+", "", part)):   # "Larkspur Mews" too
+                        if len(p) >= 3 and not p.isdigit():
+                            self._put(t["ids"], p.lower(), token)
+                            street = p.rsplit(" ", 1)[0] if " " in p else ""     # "Larkspur" too
+                            if len(street) >= 4 and not street[:1].isdigit():   # its own files: over-scrub, never under
+                                self._put(t["ids"], street.lower(), token)
+            if kind == "PERSON":                                           # "Alice" or "Nguyen" alone name her too
+                for part in {p for sep in (r"[\s,]+", r"[\s,-]+") for p in re.split(sep, value)}:
+                    part = part.strip(".'\"")
+                    part = part[:1].upper() + part[1:] if part.islower() else part
+                    if len(part) < 2 or part == value and whole:
+                        continue
+                    have = t["parts"].get(part)
+                    if have is None:
+                        self._put(t["parts"], part, token if whole else self._new(part, kind, scope))
+                    elif whole and have != token and self.v["real"].get(have) != part:   # two people of this scope
+                        t["parts"][part] = self._new(part, kind, scope)                  # share it: its own token
 
     def learn(self, name, data, scopes, find=None, also=""):
         """Record every identifier in one private file: patterns, identifier columns of a table, and what
         `find(text)` (a local model trusted with the file) lists as people, addresses and other ids.
         `also`: more text to search the same way, such as the file's path."""
         raw, text = searched(data, also)
-        self.find_in(text, scopes)
+        for kind, (p, check) in PATTERNS.items():
+            for m in re.finditer(p, text):
+                self.add(m.group(1) if m.lastindex else m.group(0), kind, scopes)
         ext = name.rsplit(".", 1)[-1].lower()
         if ext in ("csv", "tsv"):
             try:
@@ -297,8 +274,7 @@ class Vault:
         self.save()
 
     def known(self, name, data):
-        text = norm(text_of(data) or "")
-        return self.v["files"].get(name) == hashlib.sha256(text.encode()).hexdigest()
+        return self.v["files"].get(name) == hashlib.sha256(norm(text_of(data) or "").encode()).hexdigest()
 
     def _pattern(self, scope):
         """Matchers for one scope, from its own table: whole ids, name forms, folded name parts, numbers."""
@@ -316,13 +292,12 @@ class Vault:
                 for q in {p.replace("'", ""), *p.split("'")[1:]}:   # o'brien as obrien, and brien (O Brien)
                     for f in spellings(q) if len(q) >= 4 and q.lower() not in COMMON else ():
                         folded.setdefault(f, tok)
-            b, e = r"(?<![A-Za-z0-9])", r"(s?)(?![A-Za-z0-9])"     # '_' and '.' separate words; plurals too
             digits = t["digits"]
             short = {f: tok for p, tok in t["parts"].items() if len(p) < 4 and p.lower() not in COMMON for f in spellings(p)}
             common = {f: tok for p, tok in t["parts"].items() if p.lower() in COMMON for f in spellings(p)}   # brown
-            self._re[scope] = (joined, forms, [re.compile(b + "(" + alt(ks) + ")" + e, fl) if ks else None for ks, fl, b, e in
-                                               ((t["ids"], re.I, b, e),   # a name next to digits is still a name: park88
-                                                (forms, 0, "(?<![A-Za-z])", "(s?)(?![A-Za-z])"))],
+            self._re[scope] = (joined, forms, [re.compile("(?<![" + c + "])(" + alt(ks) + ")(s?)(?![" + c + "])", fl) if ks else None
+                                               for ks, fl, c in ((t["ids"], re.I, "A-Za-z0-9"),   # '_', '.' part words; plurals too
+                                                                 (forms, 0, "A-Za-z"))],   # a name next to digits is still one: park88
                                folded, re.compile("|".join(map(re.escape, sorted(folded, key=len, reverse=True)))) if folded else None,
                                (digits, re.compile(r"(?<!\d)(?:" + "|".join(SEP.join(d) for d in sorted(digits, key=len, reverse=True))
                                                    + r")(?!\d)") if digits else None), short, common)
@@ -334,23 +309,18 @@ class Vault:
         scope's view never depends on another's data. `fresh`: text the caller wrote. See own(). Any
         failure is Unscrubbable, one answer whatever the text held."""
         try:
-            return self._view(text, scopes, fresh)
-        except Unscrubbable:
-            raise
+            text = norm(text)
+            if fresh is not None:
+                return self.own(text, fresh, set(scopes)) if scopes else text
+            keep = set(scopes)                                 # [EMP_10234] in a file is text, not a placeholder
+            for scope in sorted(scopes):
+                text = self._out(text, lambda seg: self._scrub(seg, scope, keep), keep)
+            plain = decoded(text)                              # Jos&eacute;, Jos%C3%A9, Quellw=\nater: refused
+            if plain != text and any(self._out(plain, lambda seg: self._scrub(seg, s, keep), keep) != plain for s in scopes):
+                raise Unscrubbable()
+            return text
         except Exception:
             raise Unscrubbable() from None
-
-    def _view(self, text, scopes, fresh):
-        text = norm(text)
-        if fresh is not None:
-            return self.own(text, fresh, set(scopes)) if scopes else text
-        keep = set(scopes)                                     # [EMP_10234] in a file is text, not a placeholder
-        for scope in sorted(scopes):
-            text = self._out(text, lambda seg: self._scrub(seg, scope, keep), keep)
-        plain = decoded(text)                                  # Jos&eacute;, Jos%C3%A9, Quellw=\nater: refused
-        if plain != text and any(self._out(plain, lambda seg: self._scrub(seg, s, keep), keep) != plain for s in scopes):
-            raise Unscrubbable()
-        return text
 
     def _out(self, text, f, keep):
         return outside(text, f, lambda t: self.v["scope"].get(t) in keep)
@@ -373,10 +343,8 @@ class Vault:
             return text
 
         def parts(w):                                          # zorbinaQuellwater2, quillonbrimstoke, Jose for José, zOrBiNa
-            if not (inner and inner.search(fold(w))):
-                return None
             return outside(inner.sub(lambda h: folded[h.group(0)], fold(w)), lambda seg: re.sub(   # zhangwei: wei too
-                r"[^\W\d_]+", lambda r: short.get(r.group(0)) or r.group(0), seg))
+                r"[^\W\d_]+", lambda r: short.get(r.group(0)) or r.group(0), seg)) if inner and inner.search(fold(w)) else None
 
         most = max(map(len, [*short, *folded, *common]), default=0)
         glued = {**common, **short}                            # inside a word that is no word: abrown, frankq
@@ -403,7 +371,6 @@ class Vault:
                     return w[:k] + {**glued, **folded}[w[k:]]
                 if len(w) > k + 1 and w[:-k] in {**glued, **folded}:
                     return {**glued, **folded}[w[:-k]] + w[-k:]
-            return None
 
         def only(r):                                           # dev[P]ops is [P]: letters left around a part
             return "".join(re.findall(r"\[[A-Z]+_[0-9a-f]+\]", r)) if r else None   # would spell it (tran+sfer)
@@ -413,7 +380,6 @@ class Vault:
             for k, s in ((b, ""), (b[:-1], "s") if b.endswith("s") else (None, "")):
                 if k in short or k in folded:
                     return (short.get(k) or folded[k]) + s
-            return None
 
         def hump(h):                                           # transfer, let: words, whatever they hold; an
             b = re.sub("['" + MARK + "]", "", h)               # inflected one (planned) unless it is a login
@@ -443,7 +409,7 @@ class Vault:
         out = lambda text, f: outside(text, f, keep)  # noqa: E731
 
         def tok(kind, raw):
-            key = f"{kind}|{fold(flat(raw))}"
+            key = f"{kind}|" + fold(re.sub(r"\s+", " ", raw.strip()))
             if key not in fresh:
                 fresh[key] = f"[{kind}_{secrets.token_hex(4)}]"
                 fresh[fresh[key]] = raw
@@ -495,16 +461,14 @@ class Vault:
         cannot miss what it would have become."""
         def back(m):
             t = m.group(0)
-            if fresh and t in fresh:
-                return fresh[t]
-            return self.v["real"][t] if t in self.v["real"] and self.v["scope"].get(t) in set(allowed) else t
+            return fresh[t] if fresh and t in fresh else \
+                self.v["real"][t] if t in self.v["real"] and self.v["scope"].get(t) in set(allowed) else t
         return re.sub(r"(?<![A-Za-z0-9])" + TOKEN.pattern + r"(?![A-Za-z0-9])", back, text)
 
 
 def outside(text, f, keep=lambda t: True):
     """f applied to the text between placeholders (those `keep` accepts), never inside one."""
-    parts = re.split(r"(" + TOKEN.pattern.replace("(", "(?:") + r")", text)
-    return "".join(p if i % 2 and keep(p) else f(p) for i, p in enumerate(parts))
+    return "".join(p if i % 2 and keep(p) else f(p) for i, p in enumerate(re.split(r"(" + TOKEN.pattern.replace("(", "(?:") + r")", text)))
 
 
 MON = "|".join(m[:3] + "(?:" + m[3:] + ")?" for m in MONTHS) + "|sept"
@@ -514,7 +478,7 @@ DATE = re.compile(r"(?i)\b(?:(\d{1,2})(?:st|nd|rd|th)?(?:\s+of)?[\s.-]+(" + MON 
 
 def date_digits(m):
     """A written date's digit forms, as the vault keeps a DOB: 14th of March '85 -> 19850314, ..."""
-    d, mon, y = (m.group(1), m.group(2), m.group(3)) if m.group(1) else (m.group(5), m.group(4), m.group(6))
+    d, mon, y = m.group(1, 2, 3) if m.group(1) else m.group(5, 4, 6)
     mm = next(i + 1 for i, x in enumerate(MONTHS) if x.startswith(mon.lower()[:3]))
     y = y.lstrip("'")
     return [yy + f"{mm:02d}" + d.zfill(2) for yy in ([y] if len(y) == 4 else ["19" + y, "20" + y])] + \
@@ -551,10 +515,9 @@ thanks thank hi hello dear regards best ok okay done good great yes sure result 
 TITLES = set("mr ms mrs mx dr prof sir capt col gen sgt rev hon st lt maj cpt fr dear".split())
 LOW = {"list", "no", "real", "old", "part", "space"}             # List, No: surnames; list, no: words
 try:                                                            # first names, from a fixed list: never the vault
-    FIRST = {w.strip().lower() for w in open("/usr/share/dict/propernames")} - {
+    FIRST = {w.strip().lower() for w in open("/usr/share/dict/propernames")} - {   # macOS's list less what is no name,
         "will", "mark", "art", "bill", "guy", "ray", "joy", "hope", "case", "page", "lane", "rich", "sky", "major"} - set(
-        """the think those trying plastic sanity tolerant rodent stagger shatter panacea""".split()) - LOW
-    # macOS's list: not names, or (LOW) names only when capitalised
+        """the think those trying plastic sanity tolerant rodent stagger shatter panacea""".split()) - LOW   # or (LOW) one only when capitalised
 except OSError:
     FIRST = set()
 
@@ -568,11 +531,10 @@ def searched(data, also=""):
 
 def word(w, doubled=True):
     """In the dictionary, as written or inflected (salaries, reviewed, offloading). `doubled`: planned from
-    plan too, which caller text does without (ritter is no word for it: rit is one)."""
+    plan too, which caller text does without (ritter is no word for it: rit is one). Deeper, not huber; catches, not hayes."""
     w = w.lower()
     return w in WORDS or any(w.endswith(a) and w[:-len(a)] + b in WORDS and len(w) - len(a) >= n for a, b, n in (
         ("s", "", 1), ("ies", "y", 1), ("ed", "", 1), ("ed", "e", 1), ("ing", "", 3), ("ing", "e", 1), ("ly", "", 1),
         ("er", "", 4), ("ers", "", 4), ("'s", "", 1), ("ising", "ize", 1), ("ise", "ize", 1), ("ised", "ize", 1),
         ("est", "", 1), ("iest", "y", 1))) or bool(re.search(r"(s|x|z|ch|sh|o)es$", w)) and w[:-2] in WORDS or \
         doubled and bool(d := re.fullmatch(r"(\w*([b-df-hj-np-tv-z]))\2(?:ed|ing|er|est)", w)) and d.group(1) in WORDS
-                                                               # deeper, not huber; catches, not hayes

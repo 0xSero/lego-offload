@@ -86,16 +86,17 @@ ln -s "$PWD/lego" ~/.local/bin/lego
 ## Checks
 
 ```
-./run            # unit, verify, vm, matrix
-./run unit       # bricks, the exchange (every leak-hunt case), agent adapters (no model)
-./run verify     # Lean: the proof, then the Lean model against the real door
-./run sim        # Bend Monte Carlo: answered rate vs allowance and deadline
-./run vm         # every connection of a session, from inside the agent VM, and what it cannot reach
-./run matrix     # every policy level, both agents in VMs, real models, canaries scanned
-./run twoway     # the user's own policy shape, both ways, real models
+./run              # integration, verify, vm, e2e
+./run integration  # the real door, scrubber and node reader on real files, stub model: the exchange rule both
+                   # ways, one case per leak the hunts found, the queue (about 5 min, no network)
+./run verify       # Lean: the proof, then the Lean model against the real door (2,000 random cases)
+./run sim          # Bend Monte Carlo: answered rate vs allowance and deadline
+./run vm           # every connection of a session from inside the agent VM, what it cannot reach,
+                   # and no Mac credential in what the agents are given
+./run e2e          # real agents in VMs and real models: every policy level, both ways, canaries scanned
 ```
 
-Every step runs under a hard timeout. The real-model runs put synthetic data with canaries on gpu-box.
+There are no unit tests: every test runs the real door on real files, or real agents on real models. Every step runs under a hard timeout. `e2e` puts synthetic data with canaries on gpu-box.
 
 ## The bricks (`core.py`)
 
@@ -125,8 +126,8 @@ The reply row is chosen from labels, the ledger and the node's queue alone, befo
 | `lego.py` + `lego` | 154 + 3 | The CLI. Picks the agent's own model, fills the vault, starts door and route for the VM, one session at a time per policy and workspace |
 | `app.py` + `app.html` | 156 + 141 | `lego app`: a local page to run tasks and watch the door |
 | `verify/` | | `Lego.lean` (the proof), `twin.py` (Lean vs the door), `sim.bend` + `sim_ref.py` (the simulation). See [`verify/README.md`](verify/README.md) |
-| `tests/` | | `test_core.py`, `test_queue.py`, `test_exchange.py`, `test_agents.py`, `vmcheck.py`, `matrix.py`, `twoway.py`, `contention.py` |
-| `results/` | | Output of the last runs: `matrix.json`, `twoway.json`, the Lean, twin, sim and contention data |
+| `tests/` | | `integration.py`, `vmcheck.py`, `e2e.py`, and `contention.py` (the timing measurement behind the queue) |
+| `results/` | | Output of the last runs: `e2e.json`, the Lean, twin, sim and contention data |
 
 ## Results
 
@@ -181,7 +182,7 @@ All numbers come from the last runs; the data is in [`results/`](results/).
 
 - read anything of the Mac but its workspace: it runs in its own Linux VM with only the workspace and a throwaway home mounted, and no ssh key, login, keychain or Mac process in reach (`tests/vmcheck.py`);
 - use the door or the route without its session's key, or from outside the VM network;
-- read the credential its own model calls use: the route injects it, as checked in `tests/test_agents.py`;
+- read the credential its own model calls use: the route injects it, as checked in `tests/vmcheck.py`;
 - get private bytes through the door: replies are full only when every input is public;
 - learn more about a scope than its allowance: the ledger is charged before the job runs, and `leak_bound` proves the bound;
 - use timing: shaped replies arrive at a fixed deadline, the node's prompt cache is salted by scope, jobs on a node are queued so a public reply never overlaps private work, and the policy refuses a host that also runs a model (shared CPU and GPU);

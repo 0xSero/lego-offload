@@ -1,8 +1,7 @@
 """Lego core: three types and seven bricks for moving data and work between machines.
 
-Pure: no I/O, no clock, no network. Adapters (door, transport, room) do the I/O and
-ask these functions what is allowed. verify/Lego.lean proves the same rules, and
-verify/twin.py checks it against these functions.
+Pure: no I/O, no clock, no network. Adapters (door, transport, room) do the I/O and ask these functions
+what is allowed. verify/Lego.lean proves the same rules, and verify/twin.py checks it against these functions.
 
 Types:  Scope = str      a name such as "hr"; an empty scope set means public
         Node(name, trust)          a machine and the scopes it may hold
@@ -43,9 +42,7 @@ class Item:
 
 def normal(ref):
     """An absolute, normalized, NFC path, optionally prefixed by its node: `pop:/data/x`."""
-    node, sep, path = ref.partition(":")
-    if not sep or node.startswith("/"):
-        path = ref
+    path = ref if ref.startswith("/") else ref.partition(":")[2]
     return (path.startswith("/") and posixpath.normpath(path) == path
             and unicodedata.normalize("NFC", ref) == ref)
 
@@ -56,9 +53,7 @@ def label(path, public, scopes):
     if not normal(path):
         return frozenset({SEALED})
     hits = frozenset(s for d, s in scopes.items() if path == d or path.startswith(d.rstrip("/") + "/"))
-    if hits:
-        return hits
-    return frozenset() if path in public else frozenset({SEALED})
+    return hits or (frozenset() if path in public else frozenset({SEALED}))
 
 
 def check_policy(public, scopes):
@@ -91,10 +86,7 @@ def move(item, node):
 def run(inputs, node, ref):
     if any(i.node != node.name for i in inputs):
         raise Refused("move the inputs to the node first")
-    scopes = frozenset().union(*(i.scopes for i in inputs))
-    if not may_hold(node, scopes):
-        raise Refused(f"{node.name} is not trusted with {sorted(scopes)}")
-    return Item(ref, scopes, node.name)
+    return move(Item(ref, frozenset().union(*(i.scopes for i in inputs)), node.name), node)
 
 
 def salt(key, scopes):
@@ -169,10 +161,9 @@ def clock(value, took, deadline):
 # A node's slot is (bound, scopes): the latest its last job can end, and that job's scopes.
 
 def queue(slot, t, scopes):
-    """A job reaching the door at t: (scopes it also carries, earliest start). A private job
-    starts as soon as the node is free, so if the job before it may still run, its timing depends
-    on that job: it carries that job's scopes. A public job carries none; it waits for the bound,
-    when the node is surely idle."""
+    """A job reaching the door at t: (scopes it also carries, earliest start). A private job starts as soon as the
+    node is free, so if the job before it may still run, its timing depends on that job: it carries that job's
+    scopes. A public job carries none; it waits for the bound, when the node is surely idle."""
     bound, prior = slot
     if not scopes:
         return frozenset(), max(t, bound)
