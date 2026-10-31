@@ -32,8 +32,7 @@ class App:
         self.runs, self.lock = [], threading.Lock()
 
     def info(self):
-        installed = list(agents.AGENTS)                        # both live in the agent VM image
-        return {"workspace": self.p["workspace"], "agents": installed, "deadline": self.p["deadline"],
+        return {"workspace": self.p["workspace"], "agents": list(agents.AGENTS), "deadline": self.p["deadline"],
                 "allowance": self.p.get("allowance", {}), "ledger": json.loads(self.door.ledger_file.read_text()),
                 "catalog": [{"ref": r, "scopes": sorted(self.door.item(r).scopes)} for r in self.p.get("catalog", [])],
                 "public": self.p.get("public", []), "nodes": {n: {"trust": v["trust"], "model": (v.get("model") or {})
@@ -141,16 +140,19 @@ def main(policy, state, port):
 
 
 def demo(port):
-    """Synthetic private data on gpu-box and a legal memo here, exactly as the e2e test makes them."""
-    import random
-    import secrets
+    """The e2e test's synthetic private data and policy, in a folder deleted when the app stops."""
+    import shutil
+    import tempfile
     sys.path.insert(0, str(Path(__file__).resolve().parent / "tests"))
     import e2e
-    env = e2e.setup(random.Random(secrets.randbits(32)))
-    print(f"demo data: {', '.join(env['policy']['catalog'])}\nworkspace: {env['ws']}", flush=True)
+    root = Path(tempfile.mkdtemp(prefix="lego-demo-"))
+    os.environ["LEGO_TAINT"] = str(root / "taint.json")
+    simple, _ = e2e.make(root)
+    policy = door.expand(simple, root / ".lego")
+    policy["workspace"] = door.canon(policy["workspace"])
+    print(f"demo data: {root / 'private'}\nworkspace: {policy['workspace']}", flush=True)
     try:
-        main(env["policy"], env["base"] / ".lego", port)
+        main(policy, root / ".lego", port)
     finally:
-        e2e.transport._sh(e2e.POP, f"rm -rf {e2e.shlex.quote(env['pop'])}")
-        subprocess.run(["rm", "-rf", str(env["base"])], timeout=60)
+        shutil.rmtree(root, ignore_errors=True)
         print("demo data deleted", flush=True)

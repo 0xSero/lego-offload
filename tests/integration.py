@@ -1,6 +1,12 @@
-"""The exchange rule, both ways, with a stub model (no network): what each model is given is what
-its level allows, scrubbed text holds no identifier, a model that sees everything gets real names
-back, and links or workspace copies do not launder a label."""
+"""Integration: the real door, scrubber, vault and node reader on real files, with a stub model
+(no network). The exchange rule both ways: what each model is given is what its level allows,
+scrubbed text holds no identifier, a model that sees everything gets real names back, and links
+or workspace copies do not launder a label. Every leak the hunts found has its case here
+(`test_*_hunt_stays_fixed`), and the queue: jobs on a node never overlap, and a public reply's
+time does not depend on how long private work before it ran.
+
+    python3 tests/integration.py
+"""
 import http.server
 import json
 import os
@@ -1404,6 +1410,84 @@ def test_matrix_env_secrets():
     for secret in ("sk_live_51Canary", "Wh1stl1ng", "AKIACANARY", "wJalrXUtn", "plain-looking", "hunter2"):
         assert secret not in out, (secret, out)
     assert "AWS_ACCESS_KEY_ID=" in out and "STRIPE_KEY=" in out, out
+
+QUEUE = {"host": "mac", "workspace": "/ws", "public": ["/ws/a.py"], "deadline": 0.5, "job_timeout": 1.0,
+         "allowance": {"hr": 8}, "scopes": {"mac:/data/hr": "hr"},
+         "nodes": {"mac": {"trust": ["hr", "sealed"], "model": False, "out": "/o"},
+                   "pop": {"trust": ["hr"], "model": True, "out": "/o", "stage": "/s"}}}
+
+
+def queued(test):
+    """Run `test(spans, door_for)` with jobs that sleep for as long as their task text says."""
+    spans, lock = [], threading.Lock()
+
+    def sleeper(node, files, task, returns, out, keep, timeout, salt=None, **_):
+        t0 = time.time()
+        time.sleep(min(float(task), timeout))
+        with lock:
+            spans.append((t0, time.time(), task))
+        return {"took": time.time() - t0, "output": "1"}
+
+    def door_for(tmp, **kw):
+        ws = os.path.realpath(tmp) + "/ws"
+        os.makedirs(ws, exist_ok=True)
+        open(ws + "/a.py", "w").close()
+        return door.Door({**QUEUE, "workspace": ws, "public": [ws + "/a.py"], **kw}, tmp + "/state")
+
+    saved = transport.run_job, transport.put, transport.put_tree, door.Door.bytes_of
+    transport.run_job, transport.put = sleeper, lambda node, stage, name, data, timeout=60: f"{stage}/{name}"
+    transport.put_tree = lambda node, stage, src, timeout=60: f"{stage}/x"   # no real files behind hidden inputs
+    door.Door.bytes_of = lambda self, item, scrubbed, timeout=60, node=None, data=None: b""
+    try:
+        test(spans, door_for)
+    finally:
+        transport.run_job, transport.put, transport.put_tree, door.Door.bytes_of = saved
+
+
+def test_queue_public_time_independent_of_private():
+    def test(spans, door_for):
+        times = {}
+        for length in (0.05, 0.9, 0.05, 0.9):
+            with tempfile.TemporaryDirectory() as tmp:
+                d = door_for(tmp)
+                d.offload(str(length), ["mac:/data/hr/x.csv"])      # receipt: runs in the background
+                t1 = time.time()
+                r = d.offload("0.05", ["a.py"])                      # public: waits for the bound
+                times.setdefault(length, []).append(time.time() - t1)
+                for j in d.jobs:
+                    j.join()
+                assert r["row"] == "full"
+        lo, hi = times[0.05], times[0.9]
+        assert all(abs(a - b) < 0.1 for a in lo for b in hi), times    # both wait out the 1 s limit
+        assert min(lo + hi) >= 1.0, times
+    queued(test)
+
+
+def test_queue_fifo_no_overlap():
+    def test(spans, door_for):
+        order = ["0.2", "0.1", "0.3", "0.05"]
+        with tempfile.TemporaryDirectory() as tmp:
+            d = door_for(tmp)
+            for task in order:
+                d.offload(task, ["mac:/data/hr/x.csv"])
+            for j in d.jobs:
+                j.join()
+        got = sorted(spans)
+        assert [s[2] for s in got] == order, got
+        assert all(a[1] <= b[0] + 1e-3 for a, b in zip(got, got[1:])), got
+    queued(test)
+
+
+def test_queue_shaped_after_private_carries_its_scopes():
+    def test(spans, door_for):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = door_for(tmp)
+            d.offload("0.05", ["mac:/data/hr/x.csv"])
+            r = d.offload("0.05", ["mac:/data/hr/x.csv"], {"bool": True})
+            for j in d.jobs:
+                j.join()
+            assert r["row"] == "shaped" and d.slots["pop"][1] == frozenset({"hr"})
+    queued(test)
 
 
 def tmp_out():

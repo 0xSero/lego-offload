@@ -1,12 +1,11 @@
-"""Route: the room's only way to its cloud model. A localhost reverse proxy that strips
-whatever key the agent sends, injects the real credential (which never enters the room),
-streams the reply back, and can capture every exchange (request and streamed reply) for leak scans and traces.
+"""Route: the agent VM's only way to its model. A reverse proxy on the Mac that takes the session's
+key, strips it, injects the real credential (which never enters the VM), streams the reply back,
+and can capture every exchange (request and streamed reply) for the leak scans.
 """
 import http.client
 import ipaddress
 import json
 import os
-import re
 import subprocess
 import sys
 import threading
@@ -34,32 +33,12 @@ def claude_auth():
 UPSTREAMS = {"anthropic": ("api.anthropic.com", ("/v1/",), claude_auth, "oauth-2025-04-20")}
 
 
-def gunzip(b):
-    return zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(b)
-
-
-HEX = re.compile(rb"(?:[0-9a-f]{2}){32,}")
-
-
 def readable(raw, enc=""):
-    """Undo compression so captures can be scanned: whole-body gzip, or Connect envelopes
-    (1 flag byte, 4 length bytes; flag bit 1 = gzipped) as Cursor sends them. Long hex runs
-    (Cursor's BidiAppend carries the conversation as hex-encoded protobuf) are decoded and
-    appended, so what they hold is scanned too."""
+    """A body as the leak scans read it: gzip undone."""
     try:
-        if enc == "gzip" or raw[:2] == b"\x1f\x8b":
-            raw = gunzip(raw)
-        else:
-            out, i = [], 0
-            while i + 5 <= len(raw) and raw[i] in (0, 1, 2, 3):
-                n = int.from_bytes(raw[i + 1:i + 5], "big")
-                part = raw[i + 5:i + 5 + n]
-                out.append(gunzip(part) if raw[i] & 1 else part)
-                i += 5 + n
-            raw = b"\n".join(out) if out and i == len(raw) else raw
-    except (zlib.error, ValueError):
-        pass
-    return b"\n".join([raw] + [bytes.fromhex(h.decode()) for h in HEX.findall(raw)])
+        return zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(raw) if enc == "gzip" or raw[:2] == b"\x1f\x8b" else raw
+    except zlib.error:
+        return raw
 
 
 def serve(port, upstream="anthropic", capture=None, bind="127.0.0.1", token=None, peers=None):

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# One command for everything: ./run            (or ./run unit|verify|sim|vm|matrix|twoway)
-# unit    brick tests, and every agent adapter checked for credentials and wiring (no model)
-# verify  Lean: the leak bound proved for any policy, any number of calls, any adaptive
-#         strategy (timing, queue, cache included), then the Lean model run against the door
-# sim     Bend Monte Carlo of a working day (budget x reply time), checked bit-exact
-# vm      every connection of a session, from inside the agent VM, and what it cannot reach
-# matrix  every policy level both ways, real agents in VMs and real models, canaries scanned
-# twoway  real models both ways: Claude Code (Sonnet 5.5) in front, then omp on DeepSeek in front,
-#         canaries scanned in everything that reached the cloud
+# One command for everything: ./run            (or ./run integration|verify|sim|vm|e2e)
+# integration  the real door, scrubber and node reader on real files with a stub model: the exchange
+#              rule both ways, every leak the hunts found, the queue
+# verify       Lean: the leak bound proved for any policy, any number of calls, any adaptive
+#              strategy (timing, queue, cache included), then the Lean model run against the door
+# sim          Bend Monte Carlo of a working day (budget x reply time), checked bit-exact
+# vm           every connection of a session from inside the agent VM, what it cannot reach, and
+#              no Mac credential in what the agents are given
+# e2e          real agents in VMs and real models, every policy level both ways, canaries scanned
 set -euo pipefail
 cd "$(dirname "$0")"
 R=verify/runs
@@ -15,13 +15,7 @@ mkdir -p "$R" results
 t() { perl -e "alarm $1; exec @ARGV or die qq(cannot run \$ARGV[0]\n)" "${@:2}"; }   # hard timeout on every step
 step() { printf '\n== %s\n' "$*"; }
 
-unit() {
-  step unit
-  t 300 python3 tests/test_core.py
-  t 300 python3 tests/test_queue.py
-  t 300 python3 tests/test_exchange.py
-  t 300 python3 tests/test_agents.py | tee results/agents.txt
-}
+integration() { step integration; t 600 python3 tests/integration.py; }
 
 verify() {
   step "verify: Lean proofs for any number of nodes, scopes and steps, against any adaptive strategy"
@@ -41,11 +35,10 @@ sim() {
 }
 
 vmcheck() { step "vm: connections from inside the agent VM"; t 1800 python3 tests/vmcheck.py; }
-matrix() { step "matrix: every policy level, both ways"; t 14400 python3 tests/matrix.py results/matrix.json; }
-twoway() { step "twoway: Claude Code in front, then omp on the local model in front"; t 7200 python3 tests/twoway.py results/twoway.json; }
+e2e() { step "e2e: every policy level, both ways, real models"; t 21600 python3 tests/e2e.py results/e2e.json; }
 
 case "${1:-all}" in
-  unit) unit ;; verify) verify ;; sim) sim ;; vm) vmcheck ;; matrix) matrix ;; twoway) twoway ;;
-  all) unit; verify; vmcheck; matrix ;;
-  *) echo "usage: ./run [all|unit|verify|sim|vm|matrix|twoway]"; exit 2 ;;
+  integration) integration ;; verify) verify ;; sim) sim ;; vm) vmcheck ;; e2e) e2e ;;
+  all) integration; verify; vmcheck; e2e ;;
+  *) echo "usage: ./run [all|integration|verify|sim|vm|e2e]"; exit 2 ;;
 esac

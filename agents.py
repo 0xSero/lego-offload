@@ -10,10 +10,7 @@ import os
 from pathlib import Path
 
 
-PLACEHOLDER = "lego-placeholder"
-
-
-def claude(home, route_url, door_url, args, ws, key=PLACEHOLDER):
+def claude(home, route_url, door_url, args, ws, key):
     mcp = Path(home, "mcp.json")
     mcp.write_text(json.dumps({"mcpServers": {"lego": {"type": "http", "url": door_url,
                                                        "headers": {"Authorization": f"Bearer {key}"}}}}))
@@ -28,7 +25,7 @@ def claude(home, route_url, door_url, args, ws, key=PLACEHOLDER):
         "MCP_TOOL_TIMEOUT": "900000"}
 
 
-def omp(home, route_url, door_url, args, ws, model=None, key=PLACEHOLDER):
+def omp(home, route_url, door_url, args, ws, key, model):
     """oh-my-pi on a local model: the route forwards to the model's URL."""
     d = Path(home, ".omp/agent")
     d.mkdir(parents=True)

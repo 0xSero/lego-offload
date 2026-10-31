@@ -2,8 +2,10 @@
 
     python3 tests/vmcheck.py
 
-The door and the route run as in a real session (synthetic data, the twoway policy); the VM runs
-a shell script instead of an agent. Prints one line per check and exits non-zero on any failure.
+The door and the route run as in a real session (synthetic data, the e2e policy), and the VM's
+home is the one the agent adapters write; the VM runs a shell script instead of an agent. Also
+checked on the Mac: no credential the route injects appears in that home, an adapter's argv or its
+environment (compared in memory, never printed). Prints one line per check, non-zero on failure.
 """
 import json
 import os
@@ -19,7 +21,8 @@ sys.path.insert(0, str(ROOT / "tests"))
 import door  # noqa: E402
 import lego  # noqa: E402
 import route  # noqa: E402
-import twoway  # noqa: E402
+import agents  # noqa: E402
+import e2e  # noqa: E402
 import vm  # noqa: E402
 
 SCRIPT = r'''
@@ -43,7 +46,7 @@ check "omp is installed"                          'omp --version'
 def main():
     root = Path(tempfile.mkdtemp(prefix="lego-vmcheck-"))
     os.environ["LEGO_TAINT"] = str(root / "taint.json")
-    simple, _ = twoway.make(root)
+    simple, _ = e2e.make(root)
     simple["models"]["cloud"]["sees"] = "nothing"
     state = root / ".lego"
     policy = door.expand(simple, state)
@@ -56,12 +59,21 @@ def main():
     rs = route.serve(0, "anthropic", bind="0.0.0.0", token=key, peers=net)
     home = tempfile.mkdtemp(prefix="lego-home-")
     try:
-        env = {"KEY": key, "DOOR": f"http://{gw}:{ds.server_address[1]}/mcp", "ROUTE": f"http://{gw}:{rs.server_address[1]}",
+        door_url, route_url = f"http://{gw}:{ds.server_address[1]}/mcp", f"http://{gw}:{rs.server_address[1]}"
+        wrote = [agents.claude(home, route_url, door_url, ["-p", "hi"], policy["workspace"], key=key),
+                 agents.omp(home, route_url, door_url, ["-p", "hi"], policy["workspace"], key=key,
+                            model={"model": "local", "url": "http://127.0.0.1:9/v1"})]
+        blob = "\n".join([x for argv, env in wrote for x in (*argv, *env.values())] +
+                         [f.read_text(errors="replace") for f in Path(home).rglob("*") if f.is_file()])
+        env = {"KEY": key, "DOOR": door_url, "ROUTE": route_url,
                "WS": policy["workspace"], "PRIVATE": str(root / "private"), "MACHOME": os.path.expanduser("~")}
         r = vm.launch(["bash", "-c", SCRIPT], policy["workspace"], home, env=env, timeout=600)
         out = r.stdout + r.stderr
         print(out.strip())
-        here = [("door refuses a wrong key from this Mac too", route_refused(ds.server_address[1]))]
+        here = [("door refuses a wrong key from this Mac too", route_refused(ds.server_address[1])),
+                ("no Mac credential in the agents' home, argv or env", not any(c in blob for c in credentials())),
+                ("the agents' model is the route and their tool the door", route_url in blob and door_url in blob
+                 and "api.anthropic.com" not in blob)]
         for name, ok in here:
             print(f"{'ok  ' if ok else 'FAIL'} {name}")
         fails = out.count("FAIL") + sum(not ok for _, ok in here)
@@ -72,6 +84,17 @@ def main():
             s.shutdown(), s.server_close()
         shutil.rmtree(home, ignore_errors=True)
         shutil.rmtree(root, ignore_errors=True)
+
+
+def credentials():
+    """Every credential the route may inject (the part that makes it valid)."""
+    out = []
+    for _, _, auth, _ in route.UPSTREAMS.values():
+        try:
+            out += [v.split(" ", 1)[-1] for v in auth().values()]
+        except Exception:                                       # not logged in here
+            pass
+    return [c for c in out if len(c) >= 16]
 
 
 def route_refused(port):
