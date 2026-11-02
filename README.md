@@ -40,11 +40,12 @@ One file, `~/.lego/policy.json` (or `./lego.json`, or `--policy FILE`). Name the
   "models": {
     "pop":   {"url": "http://gpu-box:8000/v1", "model": "deepseek-v4.1-flash-1017",
               "ssh": "gpu-box", "dir": "/srv/lego", "sees": "everything"},
-    "cloud": {"api": "anthropic", "model": "claude-sonnet-5-5",
-              "sees": {"hr": "scrubbed", "keys": "nothing"}}
+    "cloud": {"api": "anthropic", "model": "claude-sonnet-5-5", "sees": "nothing"}
   }
 }
 ```
+
+That is the default: both harnesses on your Mac, the local model (omp's, and Claude's helper) sees everything, the cloud sees nothing. Claude can hand private work to the local model and get a typed answer or a receipt back, never the data. Give the cloud a level per folder (`{"hr": "scrubbed", "keys": "nothing"}`) to let it see more.
 
 | `sees` | The model gets |
 |-|-|
