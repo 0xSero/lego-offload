@@ -1381,6 +1381,18 @@ def test_thirty_fourth_hunt_stays_fixed():
     assert abs(a - b) < max(a, b) * 0.5 + 0.002, (a, b)                       # it was 22 ms against 217
 
 
+def test_hardlink_in_workspace_stays_fixed():
+    with tempfile.TemporaryDirectory() as tmp:                                 # the VM mounts the workspace, so
+        t, p = setup(os.path.realpath(tmp))                                    # `cat` read a hard link the door
+        os.link(t / "keys/prod.env", t / "ws/notes.md")                        # refused (LegoTest probe f7)
+        d = door.Door(p, t / "state", "cloud")
+        try:
+            d.prepare(lambda scope: lambda text: [])
+            raise AssertionError("lego started with a private file hard-linked into the workspace")
+        except core.Refused as e:
+            assert "hard link" in str(e)
+
+
 def test_own_precision():
     """Caller text: everyday and technical words stay as written; names, in any of the forms the hunts used, do not."""
     import scrub

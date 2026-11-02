@@ -56,7 +56,7 @@ def expand(p, state):
         nodes[name] = {"trust": trust(m.get("sees", "nothing")), "out": f"{d}/out", "stage": f"{d}/stage",
                        "model": {**model, **({"base_url": m["url"]} if "url" in m else {})}, **({"ssh": m["ssh"]} if m.get("ssh") else {})}
     full = {k: p[k] for k in ("workspace", "deadline", "job_timeout", "catalog") if k in p}
-    return {"deadline": 30, "job_timeout": 300, **full, "host": host,
+    return {"deadline": 60, "job_timeout": 300, **full, "host": host,
             "public": [canon(f) for f in p.get("public", [])],
             "scopes": {f"{host}:{canon(d)}": s for s, d in p["private"].items()},
             "allowance": {s: p.get("allowance", 16) for s in p["private"]}, "nodes": nodes}
@@ -289,6 +289,12 @@ class Door:
         for d in self.scopes:                                  # a listing never walks a scope at request time:
             node, _, root = d.partition(":")                   # its time would show the hidden folders
             self.found.setdefault(d, transport.files(self.p["nodes"][node], root))
+        inodes = {(st.st_dev, st.st_ino) for d in self.scopes if d.startswith(self.host + ":")
+                  for st in map(os.lstat, self.found[d])}      # the VM mounts the workspace: a hard link in it
+        for f in transport.walk(self.ws) if os.path.isdir(self.ws) else []:   # is the private file, unchecked
+            st = os.lstat(f)
+            if st.st_nlink > 1 and (st.st_dev, st.st_ino) in inodes:
+                raise core.Refused(f"{f} is a hard link to a private file: remove it from the workspace")
         for s in scrubbed:                                     # matchers built now, from what was learned: a
             self.vault._pattern(s)                             # first call's time would show how much it holds
         for d in [d for d, s in self.scopes.items() if s in scrubbed]:   # and every view, now: how long scrubbing

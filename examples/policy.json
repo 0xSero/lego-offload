@@ -3,7 +3,7 @@
   "private": {"hr": "/Users/you/private/hr", "acme": "/Users/you/private/acme", "keys": "/Users/you/private/keys"},
   "public": ["/Users/you/code/app/README.md", "/Users/you/code/app/src/utils.py"],
   "allowance": 16,
-  "deadline": 30,
+  "deadline": 60,
   "models": {
     "pop":   {"url": "http://gpu-box:8000/v1", "model": "deepseek-v4.1-flash-1017",
               "ssh": "gpu-box", "dir": "/srv/lego", "sees": "everything"},
