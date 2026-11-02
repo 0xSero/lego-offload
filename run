@@ -8,6 +8,7 @@
 # vm           every connection of a session from inside the agent VM, what it cannot reach, and
 #              no Mac credential in what the agents are given
 # e2e          real agents in VMs and real models, every policy level both ways, canaries scanned
+# leaks        a scripted attacker on the real door and real models, one synthetic person, every form scanned
 set -euo pipefail
 cd "$(dirname "$0")"
 R=verify/runs
@@ -35,10 +36,11 @@ sim() {
 }
 
 vmcheck() { step "vm: connections from inside the agent VM"; t 1800 python3 tests/vmcheck.py; }
+leaks() { step "leaks: scripted attacks, real models"; t 3600 python3 tests/leaks.py results/leaks.json; }
 e2e() { step "e2e: every policy level, both ways, real models"; t 21600 python3 tests/e2e.py results/e2e.json; }
 
 case "${1:-all}" in
-  integration) integration ;; verify) verify ;; sim) sim ;; vm) vmcheck ;; e2e) e2e ;;
-  all) integration; verify; vmcheck; e2e ;;
-  *) echo "usage: ./run [all|integration|verify|sim|vm|e2e]"; exit 2 ;;
+  integration) integration ;; verify) verify ;; sim) sim ;; vm) vmcheck ;; e2e) e2e ;; leaks) leaks ;;
+  all) integration; verify; vmcheck; leaks; e2e ;;
+  *) echo "usage: ./run [all|integration|verify|sim|vm|leaks|e2e]"; exit 2 ;;
 esac

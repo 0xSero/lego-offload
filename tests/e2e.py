@@ -45,6 +45,16 @@ LEVELS = {"everything": "everything", "scrubbed": "scrubbed", "nothing": "nothin
           "per-scope": {"hr": "scrubbed", "keys": "nothing"}}
 
 
+def local():
+    """Your local model, from your own policy ($LEGO_POLICY or ~/.lego/policy.json): the first with a url and ssh."""
+    path = Path(os.environ.get("LEGO_POLICY") or "~/.lego/policy.json").expanduser()
+    try:
+        m = next(v for v in json.loads(path.read_text())["models"].values() if v.get("url") and v.get("ssh"))
+    except (OSError, ValueError, StopIteration):
+        sys.exit(f"tests need a local model with url and ssh in {path} (see examples/policy.json)")
+    return {"ssh": m["ssh"], "url": m["url"], "model": m["model"], "dir": m.get("dir", "/srv/lego").rstrip("/") + "-test"}
+
+
 def make(root):
     """The private folders, the workspace and the policy under `root`; returns (policy, canaries)."""
     hr, keys, ws = root / "private/hr", root / "private/keys", root / "ws"
@@ -65,8 +75,7 @@ def make(root):
     (ws / "README.md").write_text("# people-ops\n\nScratch workspace for HR reporting tasks.\n")
     policy = {"private": {"hr": str(hr), "keys": str(keys)}, "public": [str(ws / "README.md")], "workspace": str(ws),
               "allowance": 16, "deadline": 60, "models": {
-                  "pop": {"ssh": "gpu-box", "url": "http://gpu-box:8000/v1", "model": "deepseek-v4.1-flash-1017",
-                          "sees": "everything", "dir": "/srv/lego-test"},
+                  "pop": {**local(), "sees": "everything"},
                   "cloud": {"api": "anthropic", "model": "claude-sonnet-5-5", "sees": {"hr": "scrubbed", "keys": "nothing"}}}}
     return policy, canaries
 

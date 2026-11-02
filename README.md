@@ -81,23 +81,25 @@ ln -s "$PWD/lego" ~/.local/bin/lego
 - macOS 26 with Apple's [`container`](https://github.com/apple/container) CLI (1.4+). lego starts its service if it is not running.
 - Python 3.11+, standard library only.
 - Claude Code logged in on the Mac (the route uses that login; the VM never sees it).
-- A machine with a local model behind an OpenAI-compatible endpoint, reachable by ssh (here `gpu-box`, vLLM).
+- A machine with a local model behind an OpenAI-compatible endpoint, reachable by ssh. The tests use the first model with a `url` and `ssh` in your own policy (`$LEGO_POLICY` or `~/.lego/policy.json`), so no host is written in the repo.
 - For `./run verify`: Lean 4 (via elan). For `./run sim`: [Bend](https://github.com/HigherOrderCO/Bend) 0.2.38.
 
 ## Checks
 
 ```
-./run              # integration, verify, vm, e2e
+./run              # integration, verify, vm, leaks, e2e
 ./run integration  # the real door, scrubber and node reader on real files, stub model: the exchange rule both
                    # ways, one case per leak the hunts found, the queue (about 5 min, no network)
 ./run verify       # Lean: the proof, then the Lean model against the real door (2,000 random cases)
 ./run sim          # Bend Monte Carlo: answered rate vs allowance and deadline
 ./run vm           # every connection of a session from inside the agent VM, what it cannot reach,
                    # and no Mac credential in what the agents are given
+./run leaks        # a scripted attacker on the real door and real models, one synthetic person: path tricks,
+                   # bits, receipts, encodings, workspace copies, hard links; every form of every value scanned
 ./run e2e          # real agents in VMs and real models: every policy level, both ways, canaries scanned
 ```
 
-There are no unit tests: every test runs the real door on real files, or real agents on real models. Every step runs under a hard timeout. `e2e` puts synthetic data with canaries on gpu-box.
+There are no unit tests: every test runs the real door on real files, or real agents on real models. Every step runs under a hard timeout. `e2e` and `leaks` put synthetic data with canaries on your local model's machine.
 
 ## The bricks (`core.py`)
 
@@ -127,8 +129,9 @@ The reply row is chosen from labels, the ledger and the node's queue alone, befo
 | `lego.py` + `lego` | 154 + 3 | The CLI. Picks the agent's own model, fills the vault, starts door and route for the VM, one session at a time per policy and workspace |
 | `app.py` + `app.html` | 158 + 141 | `lego app`: a local page to run tasks and watch the door |
 | `verify/` | | `Lego.lean` (the proof), `twin.py` (Lean vs the door), `sim.bend` + `sim_ref.py` (the simulation). See [`verify/README.md`](verify/README.md) |
-| `tests/` | | `integration.py`, `vmcheck.py`, `e2e.py`, and `contention.py` (the timing measurement behind the queue) |
-| `results/` | | Output of the last runs: `e2e.json`, the Lean, twin, sim and contention data |
+| `tests/` | | `integration.py`, `vmcheck.py`, `leaks.py`, `e2e.py`, and `contention.py` (the timing measurement behind the queue) |
+| `.claude/skills/lego/` | | A skill for Claude Code: how lego works, setting it up, running it, reading refusals, testing for leaks |
+| `results/` | | Output of the last runs: `e2e.json`, `leaks.json`, the Lean, twin, sim and contention data |
 
 ## Results
 
@@ -160,6 +163,8 @@ All numbers come from the last runs; the data is in [`results/`](results/).
 Interactive `lego claude` and `lego omp` were also run by hand in tmux: Claude listed its levels unprompted and computed from the scrubbed file; omp had the cloud draft a note "by name", the cloud got `[NAME_cd5b201c]` (0 canaries in its 1,984 bytes) and omp showed the real name.
 
 **Simulation** (8,192 sessions × 40 offloads per cell, 30 s reply time): a private question gets answered 15% of the time with 8 bits per session, 46% with 32 bits, and 77% with 64 bits.
+
+**Leak probes** (`./run leaks`, `results/leaks.json`): a scripted attacker on the real door and real models, one synthetic person, every value scanned as is, reversed, in base64, hex and spelled out. 10/10 cases hold, 0 values leaked: ten path tricks, bits (an `int[0,9999]` buys the phone's last four digits, then the allowance stops it), receipts, offloading to a cloud that sees nothing, encodings in the local agent's task text, workspace copies, and a hard link in the workspace (refused at start). Measured limits: at `scrubbed` the birth date and a medical note cross, and a phone number the local agent spells out in words crosses.
 
 **Leak hunts.** Thirty-four rounds of adversarial agents (a forward attacker, a reverse attacker, and a skeptic that reproduces each claim offline; round 17 added an attacker on the optimisation diff) attacked the door between real runs. They confirmed 13, 4, 11, 6, 6, 11, 5, 7, 6, 7, 4, 6, 3, 0, 7, 2, 5, 5, 4, 8, 4, 8, 5, 7, 6, 3, 5, 4, 2, 4, 6, 4, 4 and 1 leaks (round 26 ran without its reverse attacker, whose output a content filter blocked). All but four are fixed and have a case in `tests/integration.py` (`test_*_hunt_stays_fixed`); the four are the limits listed below. Examples: a model's output on raw data was handed back scrubbed (whitespace in a schema-valid JSON reply carried the names); an unscrubbed reply was labelled only `hr~`; file names held emails and SSNs; `read` told an existing private path from a missing one.
 
