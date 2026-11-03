@@ -31,7 +31,7 @@ mcp() { curl -s -m 20 -X POST "$DOOR" -H "Content-Type: application/json" -H "Au
 check "door answers with the session key"        'mcp "$KEY" "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}" | grep -q offload'
 check "door refuses a wrong key"                  '[ "$(curl -s -o /dev/null -w %{http_code} -m 10 -X POST "$DOOR" -H "Authorization: Bearer nope" -d {})" = 403 ]'
 check "door lists the private folders by level"   'mcp "$KEY" "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"read\",\"arguments\":{\"path\":\".\"}}}" | grep -q "you see: nothing"'
-check "route reaches Anthropic with the key"      'curl -s -m 60 "$ROUTE/v1/messages" -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" -d "{\"model\":\"claude-sonnet-5-5\",\"max_tokens\":64000,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" | grep -q request_id'
+check "route reaches Anthropic with the key"      'curl -s -m 60 "$ROUTE/v1/messages" -H "x-api-key: $KEY" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" -d "{\"model\":\"claude-sonnet-5-5\",\"max_tokens\":64000,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" | grep -qE 'request_id|"id": *"msg_''
 check "route refuses a wrong key"                 '[ "$(curl -s -o /dev/null -w %{http_code} -m 10 "$ROUTE/v1/messages" -H "x-api-key: nope" -d {})" != 200 ]'
 check "workspace is mounted and writable"         'touch "$WS/.vmcheck" && rm "$WS/.vmcheck"'
 check "private folders are not in the VM"         '! ls "$PRIVATE"'

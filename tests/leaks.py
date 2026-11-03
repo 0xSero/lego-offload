@@ -63,7 +63,7 @@ def world(root, caller, level, link=False):
         os.link(priv / "profile.md", ws / "notes.md")
     simple = {"private": {"me": str(priv)}, "workspace": str(ws), "allowance": 16, "deadline": 90,
               "models": {"pop": {**e2e.local(), "sees": "everything"},
-                         "cloud": {"api": "anthropic", "model": "claude-sonnet-5-5", "sees": level}}}
+                         "cloud": {"api": "anthropic", "model": e2e.cloud(), "sees": level}}}
     state = root / ".lego"
     p = door.expand(simple, state)
     p["workspace"] = door.canon(simple["workspace"])

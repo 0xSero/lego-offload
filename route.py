@@ -23,7 +23,10 @@ def keychain(service):
 
 
 def claude_auth():
-    """The Claude Code OAuth token, from its credentials file or the macOS keychain."""
+    """The credential for api.anthropic.com: $ANTHROPIC_API_KEY on this Mac if set (an API key, spending
+    API credit), else the Claude Code OAuth token from its credentials file or the macOS keychain."""
+    if key := os.environ.get("ANTHROPIC_API_KEY"):
+        return {"x-api-key": key}
     path = os.path.expanduser("~/.claude/.credentials.json")
     raw = open(path).read() if os.path.exists(path) else keychain("Claude Code-credentials")
     return {"Authorization": "Bearer " + json.loads(raw)["claudeAiOauth"]["accessToken"]}
@@ -84,7 +87,7 @@ def serve(port, upstream="anthropic", capture=None, bind="127.0.0.1", token=None
             drop = HOP | {"anthropic-beta"} | {k.lower() for k in real}
             hdrs = {k: v for k, v in self.headers.items() if k.lower() not in drop}
             betas = [b.strip() for b in self.headers.get("anthropic-beta", "").split(",") if b.strip()]
-            if beta and beta not in betas:
+            if beta and "Authorization" in real and beta not in betas:   # the OAuth login's beta only
                 betas.append(beta)
             if betas:
                 hdrs["anthropic-beta"] = ",".join(betas)

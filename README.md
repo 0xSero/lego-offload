@@ -80,7 +80,8 @@ ln -s "$PWD/lego" ~/.local/bin/lego
 
 - macOS 26 with Apple's [`container`](https://github.com/apple/container) CLI (1.4+). lego starts its service if it is not running.
 - Python 3.11+, standard library only.
-- Claude Code logged in on the Mac (the route uses that login; the VM never sees it).
+- Claude Code logged in on the Mac, or `ANTHROPIC_API_KEY` set in lego's environment (the route injects whichever it
+  has; the VM never sees it).
 - A machine with a local model behind an OpenAI-compatible endpoint, reachable by ssh. The tests use the first model with a `url` and `ssh` in your own policy (`$LEGO_POLICY` or `~/.lego/policy.json`), so no host is written in the repo.
 - For `./run verify`: Lean 4 (via elan). For `./run sim`: [Bend](https://github.com/HigherOrderCO/Bend) 0.2.38.
 

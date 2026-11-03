@@ -44,7 +44,8 @@ receipts about private data and never the data; `lego omp` reads it raw and cann
 
 ## Set up
 
-1. Apple `container` installed (`container system status`), Claude Code logged in on the Mac for `lego claude`.
+1. Apple `container` installed (`container system status`), and for `lego claude` either Claude Code logged in on the
+   Mac or `ANTHROPIC_API_KEY` exported where lego runs (an API key; the route injects it, the VM never holds it).
 2. A local model reachable by URL **and** by ssh on another machine (`ssh <host> true` must work with no prompt),
    with a writable `dir` there for jobs.
 3. Policy at `~/.lego/policy.json` (or `./lego.json`, `$LEGO_POLICY`, `--policy FILE`). Start from
