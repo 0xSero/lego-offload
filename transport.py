@@ -342,12 +342,12 @@ def _find(node, text):
             "street addresses, usernames and handles, personal ID or account numbers. Copy each exactly as written. "
             "Not company names, job titles, places alone, dates or amounts.\n\n" + text)
     out = f"{node['stage']}/ids-{secrets.token_hex(8)}.txt"
-    want = node["model"].get("request", {})                    # the policy's sampling fields, but the scan keeps
-    job = {"files": [], "task": task, "schema": IDS, "out": out, "keep": False, "timeout": 3600,   # a cap of its own
-           "model": {**node["model"], "request": {**want, "max_tokens": max(32768, want.get("max_tokens", 0))}}}
+    job = {"files": [], "task": task, "schema": IDS, "out": out, "keep": False, "timeout": 3600,
+           "model": {**node["model"], "request": {"max_tokens": 32768, **node["model"].get("request", {})}}}
     # before the agent starts: a busy model may take long. The model's own sampling defaults, never greedy: at
     # temperature 0 a reasoning model looped on one CSV until the cap (261k tokens); at its default 1.0 the same scan
-    # took 6.6k tokens, at 0.6 12.7k. The cap ends a run that still rambles.
+    # took 6.6k tokens, at 0.6 12.7k. The cap ends a run that still rambles; the policy's max_tokens replaces it, so
+    # a model whose context is smaller than the default is not asked for more than it has.
     _sh(node, f"mkdir -p {shlex.quote(node['stage'])}")
     r = json.loads(_sh(node, "python3 -c " + shlex.quote(RUNNER), data=json.dumps(job).encode(), timeout=3630))
     try:
