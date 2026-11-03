@@ -332,8 +332,11 @@ IDS = {"type": "object", "additionalProperties": False, "required": ["identifier
 
 
 def find_ids(node, text):
-    """Ask a node's model (trusted with the text) for the identifiers in it: [(kind, text)], window by window."""
-    return list(dict.fromkeys(x for i in range(0, max(len(text), 1), 50000) for x in _find(node, text[i:i + 52000])))
+    """Ask a node's model (trusted with the text) for the identifiers in it: [(kind, text)], window by window.
+    None when any window's scan did not finish (a truncated or malformed reply): the caller must not take that
+    for a file with no identifiers."""
+    found = [_find(node, text[i:i + 52000]) for i in range(0, max(len(text), 1), 50000)]
+    return None if any(f is None for f in found) else list(dict.fromkeys(x for f in found for x in f))
 
 
 def _find(node, text):
@@ -348,7 +351,7 @@ def _find(node, text):
     try:
         return [(i["kind"], i["text"]) for i in json.loads(r["output"])["identifiers"]]
     except (ValueError, KeyError, TypeError):
-        return []
+        return None                                             # no finished list: unknown, not "none"
 
 
 def answer(output):

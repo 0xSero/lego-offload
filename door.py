@@ -300,7 +300,9 @@ class Door:
         for d in [d for d, s in self.scopes.items() if s in scrubbed]:   # and every view, now: how long scrubbing
             node, _, root = d.partition(":")                   # takes depends on what the tables hold, so a
             for path in self.found[d]:                         # request only looks one up
-                self.views[f"{node}:{path}", self.scopes[d]] = self.view(datas[f"{node}:{path}"], {self.scopes[d]})
+                ref = f"{node}:{path}"
+                self.views[ref, self.scopes[d]] = self.view(datas[ref], {self.scopes[d]}) if self.vault.scanned(ref) else (
+                    False, "this file's identifier scan did not finish, so it cannot be scrubbed; start lego again to scan it")
                 self.names[path, self.scopes[d]] = self.vault.scrub_name(path[len(root):], [self.scopes[d]])
 
     def rel(self, ref, scope):
@@ -439,6 +441,8 @@ class Door:
         elif data is None:
             data = self.snap[item.ref] if scrubbed and item.ref in self.snap else transport.read(
                 self.p["nodes"][node], path, timeout)
+        if scrubbed and not self.mine(item) and not self.vault.scanned(item.ref):
+            raise core.Refused("this file's identifier scan did not finish, so it cannot be scrubbed; start lego again to scan it")
         if scrubbed and not self.mine(item) and not self.vault.known(item.ref, data):
             raise core.Refused("a private file changed or appeared after lego started: restart lego to learn it")
         if not scrubbed:
@@ -494,13 +498,14 @@ class Door:
             raw = lvl == "everything" and all(s in v.trust for n, v in self.nodes.items() if runnable(self.p["nodes"][n]))
             new, named = 0, []
             for f in (found[:60] if raw else found) if lvl != "nothing" else []:
-                if f"{node}:{f}" not in self.learned and not raw and f"{node}:{f}" not in self.vault.v["files"]:
+                unscanned = not raw and not self.vault.scanned(f"{node}:{f}")   # its scan did not finish: listed
+                if f"{node}:{f}" not in self.learned and not raw and f"{node}:{f}" not in self.vault.v["files"] and not unscanned:
                     new += 1                                   # not learned: its name may hold an identifier
                     continue
                 tag = hmac.new(bytes.fromhex(self.vault.v["key"]), f.encode(), "sha256").hexdigest()[:8]
                 name = f[len(root):] if raw else self.names[f, s] if (f, s) in self.names else \
                     self.vault.scrub_name(f[len(root):], [s])  # made at the start, when it was learned
-                named.append((f"{shown}/#{tag}" if hidden else f"{shown}{name}", tag, f))   # hidden: not even names
+                named.append((f"{shown}/#{tag}" if hidden or unscanned else f"{shown}{name}", tag, f))   # by tag: not even names
                 self.learned.add(f"{node}:{f}")
             twice = {n for n, c in collections.Counter(n for n, _, _ in named).items() if c > 1}
             for name, tag, f in named:                         # two names scrubbed alike: each by its own tag,
@@ -621,6 +626,9 @@ class Door:
         ins = self.items(inputs) + [core.Item("task", frozenset(self.context), self.host)]   # the task text is last
         # a job on what the caller may see comes back in full; otherwise on the raw inputs, shaped
         views = [self.give(i, self.me) for i in ins]
+        for i, s in [v for v in views if v]:                   # a scrubbed input whose scan did not finish: refused
+            if s and not self.mine(i) and not self.vault.scanned(i.ref):   # here, not inside a failing job
+                raise core.Refused("this file's identifier scan did not finish, so it cannot be scrubbed; start lego again to scan it")
         srcs = views if returns is None and all(views) else [(i, False) for i in ins]
         n = self.pick_node([i for i, _ in srcs], node)
         everything = set(self.scopes.values()) <= self.nodes[n].trust
