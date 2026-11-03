@@ -267,11 +267,22 @@ class Vault:
                     if c < len(r) and r[c].strip():
                         self.add(r[c], kind, scopes)
         low = re.sub(r"[\W_]+", "", fold(text))
-        for kind, value in (find(text) if find else []):
+        found = find(text) if find else []
+        for kind, value in found or []:
             if re.sub(r"[\W_]+", "", fold(norm(value))) in low:  # only what is really in the file, however spelt
                 self.add(value, kind, scopes)
-        self.v["files"][name] = hashlib.sha256(raw.encode()).hexdigest()
+        if found is None:                                      # the scan did not finish: the file is not learnt,
+            self.v["files"].pop(name, None)                    # its view is refused, the next start scans it again
+            self.v.setdefault("unscanned", {})[name] = True
+        else:
+            self.v["files"][name] = hashlib.sha256(raw.encode()).hexdigest()
+            self.v.setdefault("unscanned", {}).pop(name, None)
         self.save()
+        return found is not None
+
+    def scanned(self, name):
+        """False while a file's last identifier scan did not finish: it may hold names the table lacks."""
+        return name not in self.v.get("unscanned", {})
 
     def known(self, name, data):
         return self.v["files"].get(name) == hashlib.sha256(norm(text_of(data) or "").encode()).hexdigest()

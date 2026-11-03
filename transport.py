@@ -114,6 +114,8 @@ try:
     open(job["out"], "w").write(out)
     json.dump({"request": body, "response": resp}, open(job["out"] + ".trace.json", "w"))  # stays on the node
     res = {"took": 0.0 if hold else time.time() - t0, "output": None if hold else out}
+    if not hold:                               # a reply cut at its token cap is not a finished answer
+        res["finish"] = resp["choices"][0].get("finish_reason")
     if job.get("shaped"):                      # only the answer comes back, parsed here
         try:
             res["answer"] = json.loads(out.strip().removeprefix("```json").removesuffix("```"))["answer"]
@@ -333,8 +335,11 @@ IDS = {"type": "object", "additionalProperties": False, "required": ["identifier
 
 
 def find_ids(node, text):
-    """Ask a node's model (trusted with the text) for the identifiers in it: [(kind, text)], window by window."""
-    return list(dict.fromkeys(x for i in range(0, max(len(text), 1), 50000) for x in _find(node, text[i:i + 52000])))
+    """Ask a node's model (trusted with the text) for the identifiers in it: [(kind, text)], window by window.
+    None when any window's scan did not finish (a truncated or malformed reply): the caller must not take that
+    for a file with no identifiers."""
+    found = [_find(node, text[i:i + 52000]) for i in range(0, max(len(text), 1), 50000)]
+    return None if any(f is None for f in found) else list(dict.fromkeys(x for f in found for x in f))
 
 
 def _find(node, text):
@@ -350,10 +355,12 @@ def _find(node, text):
     # a model whose context is smaller than the default is not asked for more than it has.
     _sh(node, f"mkdir -p {shlex.quote(node['stage'])}")
     r = json.loads(_sh(node, "python3 -c " + shlex.quote(RUNNER), data=json.dumps(job).encode(), timeout=3630))
+    if r.get("finish") != "stop":                               # cut at the cap: a list that parses may be partial
+        return None
     try:
         return [(i["kind"], i["text"]) for i in json.loads(r["output"])["identifiers"]]
     except (ValueError, KeyError, TypeError):
-        return []
+        return None                                             # no finished list: unknown, not "none"
 
 
 def answer(output):
