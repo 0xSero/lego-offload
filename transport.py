@@ -113,6 +113,8 @@ try:
     open(job["out"], "w").write(out)
     json.dump({"request": body, "response": resp}, open(job["out"] + ".trace.json", "w"))  # stays on the node
     res = {"took": 0.0 if hold else time.time() - t0, "output": None if hold else out}
+    if not hold:                               # a reply cut at its token cap is not a finished answer
+        res["finish"] = resp["choices"][0].get("finish_reason")
     if job.get("shaped"):                      # only the answer comes back, parsed here
         try:
             res["answer"] = json.loads(out.strip().removeprefix("```json").removesuffix("```"))["answer"]
@@ -348,6 +350,8 @@ def _find(node, text):
            "temperature": 0}                                   # before the agent starts: a busy model may take long
     _sh(node, f"mkdir -p {shlex.quote(node['stage'])}")
     r = json.loads(_sh(node, "python3 -c " + shlex.quote(RUNNER), data=json.dumps(job).encode(), timeout=3630))
+    if r.get("finish") != "stop":                               # cut at the cap: a list that parses may be partial
+        return None
     try:
         return [(i["kind"], i["text"]) for i in json.loads(r["output"])["identifiers"]]
     except (ValueError, KeyError, TypeError):

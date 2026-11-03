@@ -1534,6 +1534,23 @@ def test_unfinished_scan_refuses_scrubbed():
         assert r["row"] == "scrubbed" and not leaked(r["text"]) and "162000" in r["text"], r
 
 
+def test_capped_scan_is_unfinished():
+    """A scan reply cut at its token cap is unfinished even when its JSON parses; only a `stop` reply with a list
+    counts, and an unparsable one is unfinished too."""
+    import transport
+    real = transport._sh
+    node = {"stage": "/tmp", "model": {"model": "m", "base_url": "http://x/v1"}}
+    try:
+        for reply, want in (({"output": '{"identifiers": [{"kind": "PERSON", "text": "Ada"}]}', "finish": "length"}, None),
+                            ({"output": '{"identifiers": []}', "finish": "stop"}, []),
+                            ({"output": '{"identifiers": [{"kind": "PERSON", "text": "Ada"}]}', "finish": "stop"}, [("PERSON", "Ada")]),
+                            ({"output": "", "finish": "stop"}, None), ({"output": '{"identifiers": [', "finish": "length"}, None)):
+            transport._sh = lambda node, cmd, data=None, timeout=None, reply=reply: json.dumps(reply).encode() if "RUNNER" in cmd or "import" in cmd else b""
+            assert transport.find_ids(node, "Ada was here") == want, (reply, want)
+    finally:
+        transport._sh = real
+
+
 def tmp_out():
     return tempfile.mkdtemp() + "/out.txt"
 
