@@ -6,6 +6,7 @@ each answers only callers from the VM network that hold this session's token.
 import ipaddress
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -19,8 +20,10 @@ def _run(*args, timeout=60):
 
 def network():
     """(the Mac's address as the VM sees it, the VM network): the service is started if it is not."""
-    if _run("system", "status", timeout=20).returncode:
-        _run("system", "start", "--enable-kernel-install", timeout=300)
+    if _run("system", "status", timeout=20).returncode:                 # a user-local install (~/.local/container)
+        root = os.path.dirname(os.path.dirname(os.path.realpath(shutil.which("container") or "container")))
+        where = ["--install-root", root] if root != "/usr/local" and os.path.isdir(f"{root}/libexec/container") else []
+        _run("system", "start", "--enable-kernel-install", *where, timeout=300)
     net = json.loads(_run("network", "inspect", "default", timeout=20).stdout)[0]["status"]
     return net["ipv4Gateway"], ipaddress.ip_network(net["ipv4Subnet"])
 
