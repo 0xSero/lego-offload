@@ -1502,6 +1502,55 @@ def test_queue_shaped_after_private_carries_its_scopes():
     queued(test)
 
 
+def test_unfinished_scan_refuses_scrubbed():
+    """A file whose identifier scan did not finish (a truncated or malformed reply) is refused at scrubbed instead
+    of being served with the pattern rules alone, is not remembered as learnt, and is scanned again at the next
+    start (ledgerly trial, 2026-11-03: a scan cut at its token cap let a name cross in clear)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        t, p = setup(os.path.realpath(tmp))
+        d = door.Door(p, t / "state", "cloud")
+        d.prepare(lambda scope: lambda text: None)                           # no window of any scan finished
+        shown = [w for w in d.listing().split() if w.startswith(str(t / "hr") + "/#")]   # listed by tag, not name
+        assert len(shown) == 1, d.listing()
+        for name in (shown[0], str(t / "hr/people.csv")):
+            try:
+                d.read(name)
+                raise AssertionError("an unscanned file was served scrubbed")
+            except core.Refused as e:
+                assert name != shown[0] or "did not finish" in str(e), e
+            try:
+                d.offload("average salary?", [name])
+                raise AssertionError("an unscanned file went into a job on its view")
+            except core.Refused as e:
+                assert name != shown[0] or "did not finish" in str(e), e
+        v = json.loads((t / "state/vault.json").read_text())
+        assert not any(k.endswith("people.csv") for k in v["files"]), "an unfinished scan was recorded as learnt"
+        assert any(k.endswith("people.csv") for k in v["unscanned"])
+        calls = []
+        again = door.Door(p, t / "state", "cloud")
+        again.prepare(lambda scope: lambda text: calls.append(scope) or [])  # the next start scans it again
+        assert calls, "the file was not scanned again"
+        r = again.read(str(t / "hr/people.csv"))
+        assert r["row"] == "scrubbed" and not leaked(r["text"]) and "162000" in r["text"], r
+
+
+def test_capped_scan_is_unfinished():
+    """A scan reply cut at its token cap is unfinished even when its JSON parses; only a `stop` reply with a list
+    counts, and an unparsable one is unfinished too."""
+    import transport
+    real = transport._sh
+    node = {"stage": "/tmp", "model": {"model": "m", "base_url": "http://x/v1"}}
+    try:
+        for reply, want in (({"output": '{"identifiers": [{"kind": "PERSON", "text": "Ada"}]}', "finish": "length"}, None),
+                            ({"output": '{"identifiers": []}', "finish": "stop"}, []),
+                            ({"output": '{"identifiers": [{"kind": "PERSON", "text": "Ada"}]}', "finish": "stop"}, [("PERSON", "Ada")]),
+                            ({"output": "", "finish": "stop"}, None), ({"output": '{"identifiers": [', "finish": "length"}, None)):
+            transport._sh = lambda node, cmd, data=None, timeout=None, reply=reply: json.dumps(reply).encode() if "RUNNER" in cmd or "import" in cmd else b""
+            assert transport.find_ids(node, "Ada was here") == want, (reply, want)
+    finally:
+        transport._sh = real
+
+
 def tmp_out():
     return tempfile.mkdtemp() + "/out.txt"
 
