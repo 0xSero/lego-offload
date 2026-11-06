@@ -52,7 +52,8 @@ def local():
         m = next(v for v in json.loads(path.read_text())["models"].values() if v.get("url") and v.get("ssh"))
     except (OSError, ValueError, StopIteration):
         sys.exit(f"tests need a local model with url and ssh in {path} (see examples/policy.json)")
-    return {"ssh": m["ssh"], "url": m["url"], "model": m["model"], "dir": m.get("dir", "/srv/lego").rstrip("/") + "-test"}
+    return {"ssh": m["ssh"], "url": m["url"], "model": m["model"], "dir": m.get("dir", "/srv/lego").rstrip("/") + "-test",
+            **({"request": m["request"]} if m.get("request") else {})}
 
 
 def cloud():

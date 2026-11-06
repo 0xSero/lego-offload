@@ -95,11 +95,12 @@ signal.signal(signal.SIGALRM, stop)
 signal.setitimer(signal.ITIMER_REAL, job["timeout"] - (0.75 if hold else 0))   # the whole job, not each read
 try:
     docs = "".join("\n--- %s ---\n%s" % (f, b.decode(errors="replace")) for p in job["files"] for f, b in regular(p))
-    body = {"model": job["model"]["model"], "messages": [
-        {"role": "system", "content": "You work for the owner of these files. Answer the task from the files given, or "
-         "from what you know if none are. Placeholders like [PERSON_3f9a] stand for real values: use them as the values, "
-         "copied exactly."},
-        {"role": "user", "content": job["task"] + "\n" + docs}]}
+    sys_ = ("You work for the owner of these files. Answer the task from the files given, or from what you know if "
+            "none are. Placeholders like [PERSON_3f9a] stand for real values: use them as the values, copied exactly.")
+    if job["schema"]:                          # the model sees the shape it must fill, as the cloud path does
+        sys_ += " Reply with only a JSON object matching: " + json.dumps(job["schema"])
+    body = {"model": job["model"]["model"], **job["model"].get("request", {}),   # the policy's sampling fields
+            "messages": [{"role": "system", "content": sys_}, {"role": "user", "content": job["task"] + "\n" + docs}]}
     if "temperature" in job:
         body["temperature"] = job["temperature"]
     if job.get("salt"):
@@ -346,8 +347,12 @@ def _find(node, text):
             "street addresses, usernames and handles, personal ID or account numbers. Copy each exactly as written. "
             "Not company names, job titles, places alone, dates or amounts.\n\n" + text)
     out = f"{node['stage']}/ids-{secrets.token_hex(8)}.txt"
-    job = {"files": [], "task": task, "schema": IDS, "model": node["model"], "out": out, "keep": False, "timeout": 3600,
-           "temperature": 0}                                   # before the agent starts: a busy model may take long
+    job = {"files": [], "task": task, "schema": IDS, "out": out, "keep": False, "timeout": 3600,
+           "model": {**node["model"], "request": {"max_tokens": 32768, **node["model"].get("request", {})}}}
+    # before the agent starts: a busy model may take long. The model's own sampling defaults, never greedy: at
+    # temperature 0 a reasoning model looped on one CSV until the cap (261k tokens); at its default 1.0 the same scan
+    # took 6.6k tokens, at 0.6 12.7k. The cap ends a run that still rambles; the policy's max_tokens replaces it, so
+    # a model whose context is smaller than the default is not asked for more than it has.
     _sh(node, f"mkdir -p {shlex.quote(node['stage'])}")
     r = json.loads(_sh(node, "python3 -c " + shlex.quote(RUNNER), data=json.dumps(job).encode(), timeout=3630))
     if r.get("finish") != "stop":                               # cut at the cap: a list that parses may be partial

@@ -52,7 +52,7 @@ def expand(p, state):
     nodes = {host: {"trust": sorted({*trust("everything"), core.SEALED}), "out": f"{state}/out", "stage": f"{state}/stage"}}
     for name, m in p["models"].items():
         d = m.get("dir", f"{state}/{name}" if not m.get("ssh") else "/tmp/lego")
-        model = {k: m[k] for k in ("api", "url", "model") if k in m}
+        model = {k: m[k] for k in ("api", "url", "model", "request") if k in m}   # request: sampling fields passed through
         nodes[name] = {"trust": trust(m.get("sees", "nothing")), "out": f"{d}/out", "stage": f"{d}/stage",
                        "model": {**model, **({"base_url": m["url"]} if "url" in m else {})}, **({"ssh": m["ssh"]} if m.get("ssh") else {})}
     full = {k: p[k] for k in ("workspace", "deadline", "job_timeout", "catalog") if k in p}
