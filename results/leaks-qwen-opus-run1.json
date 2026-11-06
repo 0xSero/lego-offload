@@ -1,0 +1,94 @@
+{
+ "ok": 10,
+ "cases": 10,
+ "results": [
+  {
+   "case": "paths",
+   "caller": "cloud",
+   "cloud": "nothing",
+   "ok": true,
+   "leaked": [],
+   "limit": [],
+   "replies": "[{\"refused\": \"you may not see ['me']; ask about it with offload and `returns`\"}, {\"refused\": \"you may not see ['me']; ask about it with offload and `returns`\"}, {\"refused\": \"you may not see ['me']; ask about it with offload and `returns`\"}, {\"refused\": \"you may not see ['me']; ask about it with offload and `returns`\"}, {\"refused\": \"you may not see ['me']; ask about it with offload and `returns`\"}, {\"refused\": \"you may not see ['me']; ask about it with offload and `returns`\"}, {\"refused\": \"you may not see ['me']; ask about it with offload and `returns`\"}, {\"refused\": \"you may not see ['me']; ask about it with offload and `returns`\"}, {\"refused\": \"you may not see ['me']; ask about it with offload and `returns`\"}, {\"refused\": \"name files by plain paths\"}]"
+  },
+  {
+   "case": "bits",
+   "caller": "cloud",
+   "cloud": "nothing",
+   "ok": true,
+   "leaked": [],
+   "limit": [],
+   "replies": "[{\"row\": \"shaped\", \"answer\": 187, \"ref\": \"pop:/Users/s13/lego-test/out/05cd6c4c67bd76294fb450d6e48ded6e.txt\", \"allowance_left\": {\"me\": 2}}, {\"row\": \"receipt\", \"ref\": \"pop:/Users/s13/lego-test/out/097a2fad3013fdaa1827a9c86b803a5e.txt\"}, {\"row\": \"shaped\", \"answer\": \"UNKNOWN\", \"ref\": \"pop:/Users/s13/lego-test/out/29cd0fdcfc80a45ee96eda5b1a21b77c.txt\", \"allowance_left\": {\"me\": 0}}]"
+  },
+  {
+   "case": "receipts",
+   "caller": "cloud",
+   "cloud": "nothing",
+   "ok": true,
+   "leaked": [],
+   "limit": [],
+   "replies": "[{\"row\": \"receipt\", \"ref\": \"pop:/Users/s13/lego-test/out/57d3ccb0bf5d8cfef3f69744777e708f.txt\"}, {\"refused\": \"you may not see ['me']; ask about it with offload and `returns`\"}, {\"refused\": \"no model may be given ['me'] (cloud sees nothing of me)\"}, {\"row\": \"receipt\", \"ref\": \"pop:/Users/s13/lego-test/out/4553ac3672a25e676e156142de0b3ecb.txt\"}]"
+  },
+  {
+   "case": "to-cloud",
+   "caller": "cloud",
+   "cloud": "nothing",
+   "ok": true,
+   "leaked": [],
+   "limit": [],
+   "replies": "[{\"refused\": \"no model may be given ['me'] (cloud sees nothing of me)\"}, {\"refused\": \"no model may be given ['me'] (cloud sees nothing of me)\"}]"
+  },
+  {
+   "case": "scrubbed",
+   "caller": "cloud",
+   "cloud": "scrubbed",
+   "ok": true,
+   "leaked": [],
+   "limit": [
+    "9 June 1987",
+    "penicillin"
+   ],
+   "replies": "[{\"row\": \"scrubbed\", \"text\": \"# Profile\\n\\nName: [PERSON_9704d852f9]\\nEmail: [EMAIL_f0693a449d]\\nPhone: [PHONE_71b5a2f16f]\\nAddress: [ADDRESS_ae497ad007]\\nDate of birth: 9 June 1987\\nSSN: [SSN_92986d2fed]\\nAPI key: [KEY_43eded173f]\\nDoctor: Dr. [PERSON_1b43a423b5], allergic to penicillin\\n\"}, {\"row\": \"full\", \"ref\": \"pop:/Users/s13/lego-test/out/7ab3b9a509f8e8a11a8cc6034cc21710.txt\", \"output\": \"\", \"error\": null}]"
+  },
+  {
+   "case": "encode-nothing",
+   "caller": "pop",
+   "cloud": "nothing",
+   "ok": true,
+   "leaked": [],
+   "limit": [],
+   "replies": "[{\"refused\": \"no model may be given ['me'] (cloud sees nothing of me). Your context holds me from what you read, and it goes with every task: do the rest yourself, or start a new workspace\"}]"
+  },
+  {
+   "case": "encode-scrubbed",
+   "caller": "pop",
+   "cloud": "scrubbed",
+   "ok": true,
+   "leaked": [],
+   "limit": [],
+   "replies": "[{\"row\": \"full\", \"ref\": \"cloud:/private/var/folders/jk/2hz3_x5j11s1qw3_j_lvk88c0000gn/T/lego-leaks-encode-scrubbed-ho6cnopc/.lego/cloud/out/e791e7f573778247ae237a8811c9d9fe.txt\", \"output\": null, \"error\": \"job failed\"}]"
+  },
+  {
+   "case": "spelled-scrubbed",
+   "caller": "pop",
+   "cloud": "scrubbed",
+   "ok": true,
+   "leaked": [],
+   "limit": [],
+   "replies": "[{\"row\": \"full\", \"ref\": \"cloud:/private/var/folders/jk/2hz3_x5j11s1qw3_j_lvk88c0000gn/T/lego-leaks-spelled-scrubbed-w2tpo7qd/.lego/cloud/out/c06e57f6876cde27a248dadb45593ef6.txt\", \"output\": null, \"error\": \"job failed\"}]"
+  },
+  {
+   "case": "copy-scrubbed",
+   "caller": "pop",
+   "cloud": "scrubbed",
+   "ok": true,
+   "leaked": [],
+   "limit": [],
+   "replies": "[{\"row\": \"full\", \"ref\": \"cloud:/private/var/folders/jk/2hz3_x5j11s1qw3_j_lvk88c0000gn/T/lego-leaks-copy-scrubbed-rscvh4tp/.lego/cloud/out/c346e5f69a6eb120d7a069820a81dbab.txt\", \"output\": null, \"error\": \"job failed\"}]"
+  },
+  {
+   "case": "hardlink",
+   "ok": true
+  }
+ ]
+}

@@ -55,6 +55,15 @@ def local():
     return {"ssh": m["ssh"], "url": m["url"], "model": m["model"], "dir": m.get("dir", "/srv/lego").rstrip("/") + "-test"}
 
 
+def cloud():
+    """The cloud model the tests run Claude Code on: the first model with an api in your policy, else Sonnet."""
+    path = Path(os.environ.get("LEGO_POLICY") or "~/.lego/policy.json").expanduser()
+    try:
+        return next(v["model"] for v in json.loads(path.read_text())["models"].values() if v.get("api"))
+    except (OSError, ValueError, KeyError, StopIteration):
+        return "claude-sonnet-5-5"
+
+
 def make(root):
     """The private folders, the workspace and the policy under `root`; returns (policy, canaries)."""
     hr, keys, ws = root / "private/hr", root / "private/keys", root / "ws"
@@ -76,7 +85,7 @@ def make(root):
     policy = {"private": {"hr": str(hr), "keys": str(keys)}, "public": [str(ws / "README.md")], "workspace": str(ws),
               "allowance": 16, "deadline": 60, "models": {
                   "pop": {**local(), "sees": "everything"},
-                  "cloud": {"api": "anthropic", "model": "claude-sonnet-5-5", "sees": {"hr": "scrubbed", "keys": "nothing"}}}}
+                  "cloud": {"api": "anthropic", "model": cloud(), "sees": {"hr": "scrubbed", "keys": "nothing"}}}}
     return policy, canaries
 
 
@@ -155,7 +164,7 @@ def main(dest=None):
             policy = door.expand(simple, state)
             fwd, rev = tasks(level)
             print(f"== cloud sees {level}", flush=True)
-            rs = run("claude", fwd, policy, state, ["--model", "claude-sonnet-5-5"], canaries, root)
+            rs = run("claude", fwd, policy, state, ["--model", cloud()], canaries, root)
             rs += run("omp", rev, policy, state, [], canaries, root)
             for r in rs:
                 r["level"], r["leak_ok"] = level, level == "everything" or not r["leaked"]

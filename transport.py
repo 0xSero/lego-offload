@@ -368,7 +368,7 @@ def answer(output):
 
 def run_anthropic(node, files, task, schema, out_path, keep, timeout):
     """A cloud model as a node: the files were written to this host's stage, the call goes out from here
-    with the user's Claude login. No output cap: max_tokens is the model's own maximum."""
+    with the user's Claude login or $ANTHROPIC_API_KEY. No output cap: max_tokens is the model's own maximum."""
     import urllib.request
     import route
     docs = "".join(f"\n--- {f.rsplit('/', 1)[-1].split('-', 1)[-1]} ---\n" + read({}, f).decode(errors="replace")
@@ -377,14 +377,16 @@ def run_anthropic(node, files, task, schema, out_path, keep, timeout):
            "stand for real values: use them as the values, copied exactly.")
     if schema:
         sys += " Reply with only a JSON object matching: " + json.dumps(schema_json(schema))
-    sys = [{"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."},  # the login's
-           {"type": "text", "text": sys}]                                                          # required opener
+    auth = route.claude_auth()
+    oauth = "Authorization" in auth                                # the Claude login needs its opener and beta;
+    sys = [*([{"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."}] if oauth else []),
+           {"type": "text", "text": sys}]                           # an API key is refused with that opener
     body = {"model": node["model"]["model"], "max_tokens": node["model"].get("max_tokens", 128000), "stream": True,
             "system": sys, "messages": [{"role": "user", "content": task + "\n" + docs}]}
     t0 = time.time()
     req = urllib.request.Request("https://api.anthropic.com/v1/messages", data=json.dumps(body).encode(), headers={
-        "content-type": "application/json", "anthropic-version": "2023-06-01", "anthropic-beta": "oauth-2025-04-20",
-        **route.claude_auth()})
+        "content-type": "application/json", "anthropic-version": "2023-06-01",
+        **({"anthropic-beta": "oauth-2025-04-20"} if oauth else {}), **auth})
     out = []
     with urllib.request.urlopen(req, timeout=timeout) as r:
         for line in r:
