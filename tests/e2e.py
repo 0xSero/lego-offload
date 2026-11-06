@@ -130,12 +130,15 @@ def run(agent, prompts, policy, state, extra, canaries, root):
         to_cloud = (cap.read_text() if cap.exists() and agent != "omp" else "") + "".join(
             Path(f).read_text() for f in glob.glob(f"{state}/cloud/out/*.trace.json"))
         leaked = sorted({c for c in canaries if c.lower() in to_cloud.lower()})
-        ok = bool(check(text, Path(policy["workspace"]), log))
-        out.append({"agent": agent, "task": name, "ok": ok, "leaked": leaked, "exit": code, "seconds": round(time.time() - t),
+        errors = [x for x in log if x.get("op") == "error"]      # a job that failed sent nothing: its clean leak
+        ok = bool(check(text, Path(policy["workspace"]), log)) and not errors   # count would prove nothing
+        out.append({"agent": agent, "task": name, "ok": ok, "leaked": leaked, "errors": len(errors), "exit": code,
+                    "seconds": round(time.time() - t),
                     "bytes_to_cloud": len(to_cloud), "door": [{k: x.get(k) for k in ("op", "node", "row", "scrubbed", "reason", "answer")
                                                                if k in x} for x in log], "reply": text[-1500:]})
         print(f"{'ok  ' if ok else 'FAIL'} {agent:6} {name:9} leaked {len(leaked)} of {len(canaries)} canaries "
-              f"({len(to_cloud)} bytes reached the cloud), {out[-1]['seconds']}s, door: "
+              f"({len(to_cloud)} bytes reached the cloud{f', {len(errors)} job errors' if errors else ''}), "
+              f"{out[-1]['seconds']}s, door: "
               + ", ".join(f"{x.get('op')}/{x.get('node') or ''}/{x.get('row') or ''}" for x in log), flush=True)
     return out
 
